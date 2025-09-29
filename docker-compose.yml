@@ -1,0 +1,31 @@
+version: '3.8'
+services:
+  app:
+    build: .
+    ports:
+      - '3000:3000'
+    environment:
+      - NODE_ENV=development
+      - DB_HOST=postgres
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_NAME=synthetic_data
+      - DB_PORT=5432
+    volumes:
+      - .:/usr/src/app
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:14
+    ports:
+      - '5432:5432'
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=synthetic_data
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

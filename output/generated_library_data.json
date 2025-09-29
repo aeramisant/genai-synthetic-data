@@ -1,0 +1,564 @@
+{
+  "Authors": [
+    {
+      "author_id": 1,
+      "first_name": "Jane",
+      "last_name": "Austen",
+      "birth_date": "1775-12-16",
+      "death_date": "1817-07-18",
+      "nationality": "British",
+      "biography": "Jane Austen was an English novelist known primarily for her six major novels..."
+    },
+    {
+      "author_id": 2,
+      "first_name": "George",
+      "last_name": "Orwell",
+      "birth_date": "1903-06-25",
+      "death_date": "1950-01-21",
+      "nationality": "British",
+      "biography": "George Orwell, whose real name was Eric Arthur Blair, was an English novelist..."
+    },
+    {
+      "author_id": 3,
+      "first_name": "Agatha",
+      "last_name": "Christie",
+      "birth_date": "1890-09-15",
+      "death_date": "1976-01-12",
+      "nationality": "British",
+      "biography": "Agatha Christie was an English crime novelist, short story writer and playwright..."
+    },
+    {
+      "author_id": 4,
+      "first_name": "Stephen",
+      "last_name": "King",
+      "birth_date": "1947-09-21",
+      "death_date": null,
+      "nationality": "American",
+      "biography": "Stephen King is an American author of horror, supernatural fiction, suspense, crime, science-fiction, and fantasy novels."
+    },
+    {
+      "author_id": 5,
+      "first_name": "Neil",
+      "last_name": "Gaiman",
+      "birth_date": "1960-11-10",
+      "death_date": null,
+      "nationality": "British",
+      "biography": "Neil Gaiman is an English author of short fiction, novels, comic books, graphic novels, audio theatre, and films."
+    }
+  ],
+  "Publishers": [
+    {
+      "publisher_id": 1,
+      "name": "Penguin Random House",
+      "address": "1745 Broadway",
+      "city": "New York",
+      "state": "NY",
+      "zip_code": "10019",
+      "country": "USA",
+      "contact_email": "info@penguinrandomhouse.com",
+      "contact_phone": "212-782-9000"
+    },
+    {
+      "publisher_id": 2,
+      "name": "HarperCollins",
+      "address": "195 Broadway",
+      "city": "New York",
+      "state": "NY",
+      "zip_code": "10007",
+      "country": "USA",
+      "contact_email": "contact@harpercollins.com",
+      "contact_phone": "212-207-7000"
+    },
+    {
+      "publisher_id": 3,
+      "name": "Simon & Schuster",
+      "address": "1230 Avenue of the Americas",
+      "city": "New York",
+      "state": "NY",
+      "zip_code": "10020",
+      "country": "USA",
+      "contact_email": "customer.service@simonandschuster.com",
+      "contact_phone": "212-698-7000"
+    }
+  ],
+  "Books": [
+    {
+      "book_id": 1,
+      "title": "Pride and Prejudice",
+      "author_id": 1,
+      "publisher_id": 1,
+      "isbn": "978-0141439518",
+      "publication_date": "1813-01-28",
+      "genre": "Romance",
+      "edition": "2nd",
+      "number_of_pages": 432,
+      "language": "English",
+      "format": "Paperback"
+    },
+    {
+      "book_id": 2,
+      "title": "1984",
+      "author_id": 2,
+      "publisher_id": 2,
+      "isbn": "978-0451524935",
+      "publication_date": "1949-06-08",
+      "genre": "Dystopian",
+      "edition": null,
+      "number_of_pages": 328,
+      "language": "English",
+      "format": "Paperback"
+    },
+    {
+      "book_id": 3,
+      "title": "Murder on the Orient Express",
+      "author_id": 3,
+      "publisher_id": 3,
+      "isbn": "978-0062073623",
+      "publication_date": "1934-01-01",
+      "genre": "Mystery",
+      "edition": null,
+      "number_of_pages": 256,
+      "language": "English",
+      "format": "Hardcover"
+    },
+    {
+      "book_id": 4,
+      "title": "The Shining",
+      "author_id": 4,
+      "publisher_id": 1,
+      "isbn": "978-0385121675",
+      "publication_date": "1977-01-28",
+      "genre": "Horror",
+      "edition": null,
+      "number_of_pages": 447,
+      "language": "English",
+      "format": "Paperback"
+    },
+    {
+      "book_id": 5,
+      "title": "American Gods",
+      "author_id": 5,
+      "publisher_id": 2,
+      "isbn": "978-0060558123",
+      "publication_date": "2001-06-19",
+      "genre": "Fantasy",
+      "edition": null,
+      "number_of_pages": 635,
+      "language": "English",
+      "format": "Hardcover"
+    },
+    {
+      "book_id": 6,
+      "title": "Sense and Sensibility",
+      "author_id": 1,
+      "publisher_id": 1,
+      "isbn": "978-0141439662",
+      "publication_date": "1811-01-01",
+      "genre": "Romance",
+      "edition": "1st",
+      "number_of_pages": 400,
+      "language": "English",
+      "format": "Paperback"
+    },
+    {
+      "book_id": 7,
+      "title": "Animal Farm",
+      "author_id": 2,
+      "publisher_id": 2,
+      "isbn": "978-0451526342",
+      "publication_date": "1945-08-17",
+      "genre": "Satire",
+      "edition": null,
+      "number_of_pages": 112,
+      "language": "English",
+      "format": "Paperback"
+    },
+    {
+      "book_id": 8,
+      "title": "And Then There Were None",
+      "author_id": 3,
+      "publisher_id": 3,
+      "isbn": "978-0312330873",
+      "publication_date": "1939-11-06",
+      "genre": "Mystery",
+      "edition": null,
+      "number_of_pages": 272,
+      "language": "English",
+      "format": "Paperback"
+    },
+    {
+      "book_id": 9,
+      "title": "It",
+      "author_id": 4,
+      "publisher_id": 1,
+      "isbn": "978-1501142970",
+      "publication_date": "1986-09-15",
+      "genre": "Horror",
+      "edition": null,
+      "number_of_pages": 1138,
+      "language": "English",
+      "format": "Paperback"
+    },
+    {
+      "book_id": 10,
+      "title": "Neverwhere",
+      "author_id": 5,
+      "publisher_id": 2,
+      "isbn": "978-0380789013",
+      "publication_date": "1996-06-01",
+      "genre": "Fantasy",
+      "edition": null,
+      "number_of_pages": 384,
+      "language": "English",
+      "format": "Paperback"
+    }
+  ],
+  "Library_Branches": [
+    {
+      "branch_id": 1,
+      "name": "Main Street Library",
+      "address": "123 Main Street",
+      "city": "Anytown",
+      "state": "CA",
+      "zip_code": "91234",
+      "phone_number": "555-123-4567",
+      "manager_id": 1,
+      "opening_hours": "Mon-Fri: 9am-9pm, Sat: 10am-6pm, Sun: 12pm-5pm"
+    },
+    {
+      "branch_id": 2,
+      "name": "Oakwood Branch",
+      "address": "456 Oakwood Avenue",
+      "city": "Anytown",
+      "state": "CA",
+      "zip_code": "91235",
+      "phone_number": "555-987-6543",
+      "manager_id": 2,
+      "opening_hours": "Mon-Fri: 10am-6pm, Sat: 10am-5pm, Sun: Closed"
+    }
+  ],
+  "Library_Members": [
+    {
+      "member_id": 1,
+      "first_name": "Alice",
+      "last_name": "Smith",
+      "date_of_birth": "1990-05-15",
+      "gender": "Female",
+      "address": "789 Pine Street",
+      "city": "Anytown",
+      "state": "CA",
+      "zip_code": "91236",
+      "email": "alice.smith@example.com",
+      "phone_number": "555-111-2222",
+      "join_date": "2022-01-10",
+      "membership_type": "Regular",
+      "account_status": "Active"
+    },
+    {
+      "member_id": 2,
+      "first_name": "Bob",
+      "last_name": "Johnson",
+      "date_of_birth": "1985-11-02",
+      "gender": "Male",
+      "address": "101 Elm Street",
+      "city": "Anytown",
+      "state": "CA",
+      "zip_code": "91237",
+      "email": "bob.johnson@example.com",
+      "phone_number": "555-333-4444",
+      "join_date": "2022-03-20",
+      "membership_type": "Premium",
+      "account_status": "Active"
+    },
+    {
+      "member_id": 3,
+      "first_name": "Charlie",
+      "last_name": "Brown",
+      "date_of_birth": "2000-08-22",
+      "gender": "Male",
+      "address": "222 Maple Avenue",
+      "city": "Anytown",
+      "state": "CA",
+      "zip_code": "91238",
+      "email": "charlie.brown@example.com",
+      "phone_number": "555-555-6666",
+      "join_date": "2023-05-01",
+      "membership_type": "Student",
+      "account_status": "Active"
+    },
+    {
+      "member_id": 4,
+      "first_name": "Diana",
+      "last_name": "Davis",
+      "date_of_birth": "1955-02-10",
+      "gender": "Female",
+      "address": "333 Oak Street",
+      "city": "Anytown",
+      "state": "CA",
+      "zip_code": "91239",
+      "email": "diana.davis@example.com",
+      "phone_number": "555-777-8888",
+      "join_date": "2023-08-15",
+      "membership_type": "Senior",
+      "account_status": "Active"
+    },
+    {
+      "member_id": 5,
+      "first_name": "Eve",
+      "last_name": "Wilson",
+      "date_of_birth": "1992-12-01",
+      "gender": "Female",
+      "address": "444 Willow Lane",
+      "city": "Anytown",
+      "state": "CA",
+      "zip_code": "91240",
+      "email": "eve.wilson@example.com",
+      "phone_number": "555-999-0000",
+      "join_date": "2023-10-01",
+      "membership_type": "Regular",
+      "account_status": "Active"
+    },
+    {
+      "member_id": 6,
+      "first_name": "Frank",
+      "last_name": "Garcia",
+      "date_of_birth": "1978-06-30",
+      "gender": "Male",
+      "address": "555 Cherry Street",
+      "city": "Anytown",
+      "state": "CA",
+      "zip_code": "91241",
+      "email": "frank.garcia@example.com",
+      "phone_number": "555-222-3333",
+      "join_date": "2024-01-05",
+      "membership_type": "Premium",
+      "account_status": "Active"
+    },
+    {
+      "member_id": 7,
+      "first_name": "Grace",
+      "last_name": "Rodriguez",
+      "date_of_birth": "2002-04-18",
+      "gender": "Female",
+      "address": "666 Pine Avenue",
+      "city": "Anytown",
+      "state": "CA",
+      "zip_code": "91242",
+      "email": "grace.rodriguez@example.com",
+      "phone_number": "555-444-5555",
+      "join_date": "2024-02-14",
+      "membership_type": "Student",
+      "account_status": "Active"
+    },
+    {
+      "member_id": 8,
+      "first_name": "Henry",
+      "last_name": "Martinez",
+      "date_of_birth": "1960-09-05",
+      "gender": "Male",
+      "address": "777 Oak Lane",
+      "city": "Anytown",
+      "state": "CA",
+      "zip_code": "91243",
+      "email": "henry.martinez@example.com",
+      "phone_number": "555-666-7777",
+      "join_date": "2024-03-01",
+      "membership_type": "Senior",
+      "account_status": "Active"
+    }
+  ],
+  "Book_Inventory": [
+    {
+      "inventory_id": 1,
+      "book_id": 1,
+      "branch_id": 1,
+      "quantity": 5,
+      "available_quantity": 3,
+      "condition": "Good"
+    },
+    {
+      "inventory_id": 2,
+      "book_id": 2,
+      "branch_id": 1,
+      "quantity": 3,
+      "available_quantity": 3,
+      "condition": "New"
+    },
+    {
+      "inventory_id": 3,
+      "book_id": 3,
+      "branch_id": 2,
+      "quantity": 2,
+      "available_quantity": 1,
+      "condition": "Fair"
+    },
+    {
+      "inventory_id": 4,
+      "book_id": 4,
+      "branch_id": 2,
+      "quantity": 4,
+      "available_quantity": 4,
+      "condition": "New"
+    },
+    {
+      "inventory_id": 5,
+      "book_id": 5,
+      "branch_id": 1,
+      "quantity": 1,
+      "available_quantity": 0,
+      "condition": "Good"
+    },
+    {
+      "inventory_id": 6,
+      "book_id": 6,
+      "branch_id": 1,
+      "quantity": 3,
+      "available_quantity": 3,
+      "condition": "New"
+    },
+    {
+      "inventory_id": 7,
+      "book_id": 7,
+      "branch_id": 2,
+      "quantity": 2,
+      "available_quantity": 2,
+      "condition": "Good"
+    },
+    {
+      "inventory_id": 8,
+      "book_id": 8,
+      "branch_id": 1,
+      "quantity": 1,
+      "available_quantity": 1,
+      "condition": "Fair"
+    },
+    {
+      "inventory_id": 9,
+      "book_id": 9,
+      "branch_id": 2,
+      "quantity": 5,
+      "available_quantity": 4,
+      "condition": "New"
+    },
+    {
+      "inventory_id": 10,
+      "book_id": 10,
+      "branch_id": 1,
+      "quantity": 2,
+      "available_quantity": 2,
+      "condition": "Good"
+    }
+  ],
+  "Book_Loans": [
+    {
+      "loan_id": 1,
+      "member_id": 1,
+      "inventory_id": 1,
+      "loan_date": "2024-03-01 10:00:00",
+      "due_date": "2024-03-15",
+      "return_date": "2024-03-14 14:00:00",
+      "loan_status": "Returned",
+      "fine_amount": 0
+    },
+    {
+      "loan_id": 2,
+      "member_id": 2,
+      "inventory_id": 3,
+      "loan_date": "2024-03-05 14:00:00",
+      "due_date": "2024-03-19",
+      "return_date": null,
+      "loan_status": "Checked Out",
+      "fine_amount": 0
+    },
+    {
+      "loan_id": 3,
+      "member_id": 3,
+      "inventory_id": 9,
+      "loan_date": "2024-02-20 16:00:00",
+      "due_date": "2024-03-05",
+      "return_date": null,
+      "loan_status": "Overdue",
+      "fine_amount": 2.5
+    },
+    {
+      "loan_id": 4,
+      "member_id": 4,
+      "inventory_id": 5,
+      "loan_date": "2024-01-15 11:00:00",
+      "due_date": "2024-01-29",
+      "return_date": null,
+      "loan_status": "Lost",
+      "fine_amount": 15
+    },
+    {
+      "loan_id": 5,
+      "member_id": 5,
+      "inventory_id": 2,
+      "loan_date": "2024-03-08 09:00:00",
+      "due_date": "2024-03-22",
+      "return_date": null,
+      "loan_status": "Checked Out",
+      "fine_amount": 0
+    }
+  ],
+  "Employees": [
+    {
+      "employee_id": 1,
+      "first_name": "David",
+      "last_name": "Lee",
+      "job_title": "Librarian",
+      "department_id": 1,
+      "branch_id": 1,
+      "email": "david.lee@example.com",
+      "phone_number": "555-123-7890",
+      "hire_date": "2020-07-01"
+    },
+    {
+      "employee_id": 2,
+      "first_name": "Sarah",
+      "last_name": "Kim",
+      "job_title": "Assistant Librarian",
+      "department_id": 1,
+      "branch_id": 2,
+      "email": "sarah.kim@example.com",
+      "phone_number": "555-456-0123",
+      "hire_date": "2021-02-15"
+    },
+    {
+      "employee_id": 3,
+      "first_name": "Michael",
+      "last_name": "Nguyen",
+      "job_title": "IT Specialist",
+      "department_id": 2,
+      "branch_id": null,
+      "email": "michael.nguyen@example.com",
+      "phone_number": "555-789-3456",
+      "hire_date": "2022-09-01"
+    },
+    {
+      "employee_id": 4,
+      "first_name": "Jessica",
+      "last_name": "Chen",
+      "job_title": "Acquisitions Manager",
+      "department_id": 2,
+      "branch_id": null,
+      "email": "jessica.chen@example.com",
+      "phone_number": "555-012-6789",
+      "hire_date": "2023-04-01"
+    }
+  ],
+  "Departments": [
+    {
+      "department_id": 1,
+      "name": "Library Services",
+      "location": "Main Library",
+      "manager_id": 1
+    },
+    {
+      "department_id": 2,
+      "name": "Administration",
+      "location": "Headquarters",
+      "manager_id": 4
+    }
+  ]
+}
