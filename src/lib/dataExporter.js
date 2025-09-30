@@ -1,8 +1,7 @@
-const fs = require('fs').promises;
-const path = require('path');
-const archiver = require('archiver');
-const { Parser } = require('json2csv');
-const { pool } = require('./database');
+import { promises as fs, createWriteStream } from 'fs';
+import path from 'path';
+import archiver from 'archiver';
+import { Parser } from 'json2csv';
 
 class DataExporter {
   constructor() {
@@ -20,7 +19,7 @@ class DataExporter {
         if (!Array.isArray(records) || records.length === 0) continue;
 
         const parser = new Parser({
-          fields: Object.keys(records[0])
+          fields: Object.keys(records[0]),
         });
         const csv = parser.parse(records);
         const filePath = path.join(this.outputDir, `${tableName}.csv`);
@@ -37,9 +36,11 @@ class DataExporter {
 
   async createZipArchive(files, archiveName = 'generated_data') {
     return new Promise((resolve, reject) => {
-      const output = fs.createWriteStream(path.join(this.outputDir, `${archiveName}.zip`));
+      const output = createWriteStream(
+        path.join(this.outputDir, `${archiveName}.zip`)
+      );
       const archive = archiver('zip', {
-        zlib: { level: 9 } // Maximum compression
+        zlib: { level: 9 }, // Maximum compression
       });
 
       output.on('close', () => {
@@ -54,51 +55,47 @@ class DataExporter {
       archive.pipe(output);
 
       // Add each CSV file to the archive
-      files.forEach(file => {
+      for (const file of files) {
         archive.file(file, { name: path.basename(file) });
-      });
+      }
 
       archive.finalize();
     });
   }
 
-  async storeInDatabase(data) {
+  async storeInDatabase(data, name, description = '', schemaDefinition = null) {
     try {
-      // Start a transaction
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
+      // Import DatasetManager using dynamic import to avoid circular dependency
+      const { default: DatasetManager } = await import('./datasetManager.js');
+      const manager = new DatasetManager();
 
-        for (const [tableName, records] of Object.entries(data)) {
-          if (!Array.isArray(records) || records.length === 0) continue;
-
-          // Get column names from the first record
-          const columns = Object.keys(records[0]);
-          
-          // Generate placeholders for the prepared statement
-          const placeholders = records.map((_, idx) => 
-            `(${columns.map((_, colIdx) => `$${idx * columns.length + colIdx + 1}`).join(',')})`
-          ).join(',');
-
-          // Create the insert query
-          const query = `
-            INSERT INTO ${tableName} (${columns.join(',')})
-            VALUES ${placeholders}
-          `;
-
-          // Flatten all values for the prepared statement
-          const values = records.flatMap(record => columns.map(col => record[col]));
-
-          await client.query(query, values);
-        }
-
-        await client.query('COMMIT');
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      } finally {
-        client.release();
+      // If schema definition wasn't provided, extract it from the data
+      if (!schemaDefinition) {
+        schemaDefinition = Object.entries(data).reduce(
+          (acc, [tableName, records]) => {
+            if (records.length > 0) {
+              acc[tableName] = {
+                columns: Object.keys(records[0]).map((column) => ({
+                  name: column,
+                  type: typeof records[0][column],
+                })),
+              };
+            }
+            return acc;
+          },
+          {}
+        );
       }
+
+      // Store the dataset
+      const datasetId = await manager.saveDataset(
+        name || `Dataset_${new Date().toISOString()}`,
+        description,
+        schemaDefinition,
+        data
+      );
+
+      return datasetId;
     } catch (error) {
       console.error('Error storing data in database:', error);
       throw error;
@@ -106,4 +103,4 @@ class DataExporter {
   }
 }
 
-module.exports = DataExporter;
+export default DataExporter;

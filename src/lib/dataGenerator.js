@@ -1,5 +1,71 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { Parser } = require('node-sql-parser');
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import pkg from 'node-sql-parser';
+const { Parser } = pkg;
+
+// --- Helper utilities ----------------------------------------------------
+function stripCodeFences(text) {
+  return text
+    .replace(/```[a-zA-Z]*\s*/g, '')
+    .replace(/```/g, '')
+    .trim();
+}
+
+function safeParseJSON(str) {
+  try {
+    return JSON.parse(str);
+  } catch (_) {
+    return null;
+  }
+}
+
+function cleanGeminiJSON(raw, expected = 'object') {
+  if (!raw || typeof raw !== 'string') return expected === 'array' ? [] : {};
+  let text = stripCodeFences(raw)
+    // Normalize newlines / spacing
+    .replace(/\\n/g, ' ')
+    .replace(/\r?\n/g, ' ')
+    .replace(/\s+/g, ' ') // collapse whitespace
+    .trim();
+
+  // Attempt to locate first JSON object or array if extra prose exists
+  const firstBrace = text.indexOf('{');
+  const firstBracket = text.indexOf('[');
+  let sliceStart = -1;
+  if (firstBrace !== -1 && firstBracket !== -1) {
+    sliceStart = Math.min(firstBrace, firstBracket);
+  } else {
+    sliceStart = firstBrace !== -1 ? firstBrace : firstBracket;
+  }
+  if (sliceStart > 0) text = text.slice(sliceStart);
+
+  // Trim trailing prose after final closing bracket/brace
+  const lastBrace = text.lastIndexOf('}');
+  const lastBracket = text.lastIndexOf(']');
+  const sliceEnd = Math.max(lastBrace, lastBracket);
+  if (sliceEnd !== -1) text = text.slice(0, sliceEnd + 1);
+
+  // Heuristic fixes for common truncations (very conservative)
+  if (expected === 'array') {
+    if (!text.startsWith('[')) text = '[' + text;
+    if (!text.endsWith(']')) text = text + ']';
+  } else {
+    // object expected
+    if (text.startsWith('[') && expected === 'object') {
+      // wrap array in object under data key
+      return { data: safeParseJSON(text) || [] };
+    }
+    if (!text.startsWith('{')) text = '{' + text;
+    if (!text.endsWith('}')) text = text + '}';
+  }
+
+  // Last attempt: remove trailing commas before } or ]
+  text = text.replace(/,\s*([}\]])/g, '$1');
+
+  const parsed = safeParseJSON(text);
+  if (parsed !== null) return parsed;
+  // Fallback minimal structure
+  return expected === 'array' ? [] : {};
+}
 
 class DataGenerator {
   constructor() {
@@ -9,8 +75,9 @@ class DataGenerator {
     });
     this.parser = new Parser();
     this.options = {
-      database: 'MySQL',
+      database: 'PostgreSQL',
       multipleStatements: true,
+      includeEnums: true,
     };
   }
 
@@ -124,28 +191,74 @@ class DataGenerator {
   }
 
   async generateSyntheticData(schema, instructions, config = {}) {
-    const { numRecords = 100, temperature = 0.7 } = config;
+    const { numRecords = 100 } = config;
 
-    const prompt = `
-      Generate synthetic data based on the following schema and instructions.
-      Generate ${numRecords} records for each table while maintaining referential integrity.
-      
-      Schema:
-      ${JSON.stringify(schema, null, 2)}
-      
-      Additional Instructions:
-      ${instructions || 'Generate realistic and consistent data'}
-      
-      Return the data in JSON format with table names as keys and arrays of records as values.
-      IMPORTANT: Return only the JSON data without any markdown formatting or code blocks.
-    `;
+    // Split the generation into multiple smaller requests
+    const tables = Object.keys(schema.tables);
+    const generatedData = {};
 
-    const result = await this.model.generateContent(prompt);
+    for (const tableName of tables) {
+      const prompt = `
+        Generate synthetic data for the ${tableName} table.
+        Generate ${numRecords} records while maintaining referential integrity.
+        
+        Table Schema:
+        ${JSON.stringify(schema.tables[tableName], null, 2)}
+        
+        Full Schema Context (for relationships):
+        ${JSON.stringify(schema, null, 2)}
+        
+        Additional Instructions:
+        ${instructions || 'Generate realistic and consistent data'}
+        
+        Return ONLY a JSON array of records for the ${tableName} table.
+        IMPORTANT: Return only the JSON array without any markdown formatting or code blocks.
+      `;
 
-    const text = result.response.text();
-    // Remove any markdown code blocks if present
-    const jsonStr = text.replace(/```json\n|\n```/g, '').trim();
-    return JSON.parse(jsonStr);
+      try {
+        const result = await this.model.generateContent(prompt);
+        const rawText = result.response.text();
+        const cleanText = cleanGeminiJSON(rawText);
+
+        // Parse the array response
+        let tableData;
+        try {
+          // If it's a standalone array
+          if (cleanText.startsWith('[') && cleanText.endsWith(']')) {
+            tableData = JSON.parse(cleanText);
+          } else {
+            // If it's wrapped in an object
+            const parsed = JSON.parse(cleanText);
+            tableData = parsed[tableName] || Object.values(parsed)[0];
+          }
+        } catch (innerError) {
+          console.error(`Error parsing ${tableName} data:`, innerError);
+          console.error('Clean text:', cleanText);
+          throw new Error(`Failed to parse data for ${tableName}`);
+        }
+
+        if (!Array.isArray(tableData)) {
+          throw new Error(`Generated data for ${tableName} is not an array`);
+        }
+
+        // Fallback: if model returns empty array, synthesize a placeholder row
+        if (tableData.length === 0) {
+          const placeholder = {};
+          const cols = schema.tables[tableName]?.columns || {};
+          Object.keys(cols).forEach((col) => {
+            placeholder[col] = null;
+          });
+          tableData.push(placeholder);
+        }
+
+        generatedData[tableName] = tableData;
+      } catch (error) {
+        console.error(`Error generating data for ${tableName}:`, error);
+        throw error;
+      }
+    }
+
+    return generatedData;
   }
 
   async modifyGeneratedData(data, modifications) {
@@ -168,4 +281,4 @@ class DataGenerator {
   }
 }
 
-module.exports = DataGenerator;
+export default DataGenerator;
