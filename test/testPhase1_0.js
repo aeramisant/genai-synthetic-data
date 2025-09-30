@@ -1,20 +1,7 @@
-import dotenv from 'dotenv';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-import fs from 'fs/promises';
-import path from 'path';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-// Load environment variables from the root directory
-dotenv.config({ path: path.join(dirname(__dirname), '.env') });
+require('dotenv').config();
 
 // Database setup
-import { setupDatabase } from '../src/lib/database.js';
-import DataGenerator from '../src/lib/dataGenerator.js';
-import DataModifier from '../src/lib/dataModifier.js';
-import DataExporter from '../src/lib/dataExporter.js';
+const { setupDatabase } = require('../src/lib/database');
 
 // Ensure database is initialized before running tests
 async function setup() {
@@ -26,6 +13,11 @@ async function setup() {
     process.exit(1);
   }
 }
+const fs = require('fs').promises;
+const path = require('path');
+const DataGenerator = require('../src/lib/dataGenerator');
+const DataModifier = require('../src/lib/dataModifier');
+const DataExporter = require('../src/lib/dataExporter');
 
 async function testPhase1() {
   try {
@@ -37,7 +29,7 @@ async function testPhase1() {
     // 1. Read and parse the DDL
     console.log('Reading and parsing DDL...');
     const ddlContent = await fs.readFile(
-      path.join(dirname(__dirname), 'assets/library_mgm_schema.ddl'),
+      path.join(__dirname, '../assets/library_mgm_schema.ddl'),
       'utf-8'
     );
 
@@ -58,38 +50,15 @@ async function testPhase1() {
       - 4 employees distributed across 2 departments
     `;
 
-    let initialData = await generator.generateSyntheticData(
+    const initialData = await generator.generateSyntheticData(
       schema,
       instructions
     );
-    console.log('Initial data raw keys:', Object.keys(initialData || {}));
-
-    // Ensure expected tables exist (even if empty) to avoid downstream crashes
-    const expectedTables = [
-      'Authors',
-      'Publishers',
-      'Books',
-      'Library_Branches',
-      'Library_Members',
-      'Book_Inventory',
-      'Book_Loans',
-      'Employees',
-    ];
-    if (!initialData || typeof initialData !== 'object') initialData = {};
-    for (const t of expectedTables) {
-      if (!Array.isArray(initialData[t])) initialData[t] = [];
-    }
-    console.log('Initial data normalized keys:', Object.keys(initialData));
     console.log('Initial data generated successfully');
 
     // 3. Export to CSV and create ZIP
     console.log('\nExporting to CSV...');
     const csvFiles = await exporter.exportToCSV(initialData);
-    if (!csvFiles || csvFiles.length === 0) {
-      console.warn(
-        'WARNING: No CSV files produced (data arrays may be empty).'
-      );
-    }
     console.log('CSV files created:', csvFiles);
 
     console.log('\nCreating ZIP archive...');
@@ -109,6 +78,21 @@ async function testPhase1() {
       datasetId
     );
 
+    // Verify data storage
+    const DatasetManager = require('../src/lib/datasetManager');
+    const manager = new DatasetManager();
+    const storedDataset = await manager.getDataset(datasetId);
+    console.log('\nVerifying stored data:');
+    console.log('- Dataset name:', storedDataset.metadata.name);
+    console.log('- Tables stored:', Object.keys(storedDataset.data).length);
+    console.log(
+      '- Total records:',
+      Object.values(storedDataset.data).reduce(
+        (sum, records) => sum + records.length,
+        0
+      )
+    );
+
     // 5. Test data modification
     console.log('\nTesting data modification...');
     const modifications = `
@@ -120,40 +104,14 @@ async function testPhase1() {
       5. Change membership_type to "Premium" for members with more than 10 successful returns
     `;
 
-    let modifiedData;
-    try {
-      modifiedData = await modifier.modifyData(initialData, modifications);
-    } catch (e) {
-      console.error(
-        'Modification via AI failed, falling back to original data. Reason:',
-        e.message
-      );
-      modifiedData = { ...initialData };
-    }
-
-    // Normalize again to guarantee arrays
-    for (const t of Object.keys(initialData)) {
-      if (!Array.isArray(modifiedData[t])) modifiedData[t] = initialData[t];
-    }
-    for (const t of expectedTables) {
-      if (!Array.isArray(modifiedData[t])) modifiedData[t] = [];
-    }
-
-    const safeLen = (obj, key) =>
-      Array.isArray(obj?.[key]) ? obj[key].length : 0;
+    const modifiedData = await modifier.modifyData(initialData, modifications);
     console.log('Data modified successfully');
     console.log('Modifications summary:');
-    console.log('- Modified books:', safeLen(modifiedData, 'Books'));
-    console.log('- Modified loans:', safeLen(modifiedData, 'Book_Loans'));
-    console.log('- Modified employees:', safeLen(modifiedData, 'Employees'));
-    console.log(
-      '- Modified inventory:',
-      safeLen(modifiedData, 'Book_Inventory')
-    );
-    console.log(
-      '- Modified members:',
-      safeLen(modifiedData, 'Library_Members')
-    );
+    console.log('- Modified books:', modifiedData.Books.length);
+    console.log('- Modified loans:', modifiedData.Book_Loans.length);
+    console.log('- Modified employees:', modifiedData.Employees.length);
+    console.log('- Modified inventory:', modifiedData.Book_Inventory.length);
+    console.log('- Modified members:', modifiedData.Library_Members.length);
 
     // 6. Export modified data
     console.log('\nExporting modified data...');
@@ -164,7 +122,6 @@ async function testPhase1() {
     console.log('\nPhase 1 testing completed successfully!');
   } catch (error) {
     console.error('Error during Phase 1 testing:', error);
-    throw error;
   }
 }
 

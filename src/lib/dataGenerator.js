@@ -1,6 +1,10 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import pkg from 'node-sql-parser';
 const { Parser } = pkg;
+import {
+  generateDeterministicData,
+  validateDeterministicData,
+} from './deterministicGenerator.js';
 
 // --- Helper utilities ----------------------------------------------------
 function stripCodeFences(text) {
@@ -81,6 +85,83 @@ class DataGenerator {
     };
   }
 
+  // Very lightweight fallback parser for simple CREATE TABLE statements (MySQL-ish syntax)
+  _naiveParseDDL(ddl) {
+    const schema = { tables: {}, relationships: [] };
+    const blocks = ddl
+      .replace(/--.*$/gm, '')
+      .split(/CREATE TABLE/i)
+      .slice(1) // first split chunk before first CREATE TABLE
+      .map((b) => 'CREATE TABLE' + b);
+    const fkRegex =
+      /foreign key\s*\(([^)]+)\)\s*references\s*([`"']?)([A-Za-z0-9_]+)\2\s*\(([^)]+)\)/i;
+    blocks.forEach((blk) => {
+      const nameMatch = blk.match(
+        /CREATE TABLE\s+[`"']?([A-Za-z0-9_]+)[`"']?\s*\(/i
+      );
+      if (!nameMatch) return;
+      const tableName = nameMatch[1];
+      const inside = blk.substring(blk.indexOf('(') + 1, blk.lastIndexOf(')'));
+      const lines = inside
+        .split(/,(?![^()]*\))/) // split on commas not inside parens
+        .map((l) => l.trim())
+        .filter((l) => l.length);
+      const tableSchema = {
+        name: tableName,
+        columns: {},
+        primaryKey: [],
+        foreignKeys: [],
+      };
+      lines.forEach((line) => {
+        const lower = line.toLowerCase();
+        if (lower.startsWith('primary key')) {
+          const cols = line.match(/\(([^)]+)\)/);
+          if (cols) {
+            tableSchema.primaryKey = cols[1]
+              .split(/\s*,\s*/)
+              .map((c) => c.replace(/[`"']/g, ''));
+          }
+          return;
+        }
+        if (lower.startsWith('foreign key')) {
+          const m = line.match(fkRegex);
+          if (m) {
+            const cols = m[1]
+              .split(/\s*,\s*/)
+              .map((c) => c.replace(/[`"']/g, ''));
+            const refTable = m[3];
+            const refCols = m[4]
+              .split(/\s*,\s*/)
+              .map((c) => c.replace(/[`"']/g, ''));
+            tableSchema.foreignKeys.push({
+              columns: cols,
+              referenceTable: refTable,
+              referenceColumns: refCols,
+            });
+          }
+          return;
+        }
+        // Column definition
+        const colMatch = line.match(
+          /^([`"']?)([A-Za-z0-9_]+)\1\s+([A-Za-z0-9_()',' ]+)/
+        );
+        if (colMatch) {
+          const colName = colMatch[2];
+          let typePart = colMatch[3].split(/\s+/)[0];
+          if (/auto_increment/i.test(line)) typePart = 'serial';
+          if (/enum/i.test(typePart)) typePart = 'text';
+          const notNull = /not null/i.test(line);
+          tableSchema.columns[colName] = { type: typePart, nullable: !notNull };
+          if (/primary key/i.test(line)) {
+            tableSchema.primaryKey.push(colName);
+          }
+        }
+      });
+      schema.tables[tableName] = tableSchema;
+    });
+    return schema;
+  }
+
   _processAST(ast) {
     const schema = {
       tables: {},
@@ -96,16 +177,26 @@ class DataGenerator {
         const tableSchema = {
           name: tableName,
           columns: {},
-          primaryKey: null,
+          primaryKey: [],
           foreignKeys: [],
         };
 
         // Process columns
         for (const col of statement.create_definitions) {
           if (col.resource === 'column') {
+            let dataType = col.definition.dataType;
+            if (/auto_increment/i.test(JSON.stringify(col))) {
+              dataType = 'serial';
+            }
+            if (/enum/i.test(dataType)) {
+              // Simplify ENUM to text for deterministic generator
+              dataType = 'text';
+            }
+            const notNullExplicit =
+              col.nullable && col.nullable.value === 'not null';
             tableSchema.columns[col.column.column] = {
-              type: col.definition.dataType,
-              nullable: !col.nullable || col.nullable.value === 'null',
+              type: dataType,
+              nullable: !notNullExplicit, // only false if explicitly NOT NULL
               default: col.definition.default?.value,
             };
           } else if (col.resource === 'constraint') {
@@ -164,8 +255,23 @@ class DataGenerator {
       // Transform the AST into a structured schema
       const schema = this._processAST(ast);
 
-      // Use Gemini to enhance the schema with additional insights
-      return await this._enhanceSchemaWithAI(schema, ddlContent);
+      // If AI usage disabled, skip enhancement to avoid network calls
+      if (process.env.USE_AI === 'false') {
+        if (!schema.tables || Object.keys(schema.tables).length === 0) {
+          // Fallback naive parse for MySQL style (AUTO_INCREMENT / ENUM) DDL
+          const naive = this._naiveParseDDL(ddlContent);
+          return naive;
+        }
+        return schema;
+      }
+
+      // Use Gemini to enhance the schema with additional insights (best-effort)
+      try {
+        return await this._enhanceSchemaWithAI(schema, ddlContent);
+      } catch (enhErr) {
+        console.warn('AI schema enhancement skipped (error):', enhErr.message);
+        return schema; // fallback to raw parsed schema
+      }
     } catch (error) {
       console.error('Error parsing DDL:', error);
 
@@ -192,72 +298,82 @@ class DataGenerator {
 
   async generateSyntheticData(schema, instructions, config = {}) {
     const { numRecords = 100 } = config;
+    const useAI = process.env.USE_AI !== 'false';
 
-    // Split the generation into multiple smaller requests
+    // If AI disabled entirely -> deterministic path
+    if (!useAI) {
+      const deterministic = generateDeterministicData(schema, {
+        globalRowCount: numRecords,
+      });
+      const validation = validateDeterministicData(schema, deterministic);
+      if (!validation.passed) {
+        console.warn(
+          'Deterministic generation validation errors:',
+          validation.errors.slice(0, 10)
+        );
+      }
+      return deterministic;
+    }
+
     const tables = Object.keys(schema.tables);
     const generatedData = {};
+    const aiErrors = [];
 
     for (const tableName of tables) {
       const prompt = `
         Generate synthetic data for the ${tableName} table.
         Generate ${numRecords} records while maintaining referential integrity.
-        
-        Table Schema:
-        ${JSON.stringify(schema.tables[tableName], null, 2)}
-        
-        Full Schema Context (for relationships):
-        ${JSON.stringify(schema, null, 2)}
-        
-        Additional Instructions:
-        ${instructions || 'Generate realistic and consistent data'}
-        
+        Table Schema: ${JSON.stringify(schema.tables[tableName], null, 2)}
+        Full Schema Context: ${JSON.stringify(schema, null, 2)}
+        Additional Instructions: ${
+          instructions || 'Generate realistic and consistent data'
+        }
         Return ONLY a JSON array of records for the ${tableName} table.
-        IMPORTANT: Return only the JSON array without any markdown formatting or code blocks.
-      `;
+        IMPORTANT: Return only the JSON array without any markdown formatting or code blocks.`;
 
+      let tableData = [];
       try {
         const result = await this.model.generateContent(prompt);
         const rawText = result.response.text();
         const cleanText = cleanGeminiJSON(rawText);
-
-        // Parse the array response
-        let tableData;
         try {
-          // If it's a standalone array
           if (cleanText.startsWith('[') && cleanText.endsWith(']')) {
             tableData = JSON.parse(cleanText);
           } else {
-            // If it's wrapped in an object
             const parsed = JSON.parse(cleanText);
-            tableData = parsed[tableName] || Object.values(parsed)[0];
+            tableData = parsed[tableName] || Object.values(parsed)[0] || [];
           }
-        } catch (innerError) {
-          console.error(`Error parsing ${tableName} data:`, innerError);
-          console.error('Clean text:', cleanText);
-          throw new Error(`Failed to parse data for ${tableName}`);
+        } catch (parseErr) {
+          aiErrors.push(`Parse error ${tableName}: ${parseErr.message}`);
+          tableData = [];
         }
-
-        if (!Array.isArray(tableData)) {
-          throw new Error(`Generated data for ${tableName} is not an array`);
-        }
-
-        // Fallback: if model returns empty array, synthesize a placeholder row
-        if (tableData.length === 0) {
-          const placeholder = {};
-          const cols = schema.tables[tableName]?.columns || {};
-          Object.keys(cols).forEach((col) => {
-            placeholder[col] = null;
-          });
-          tableData.push(placeholder);
-        }
-
-        generatedData[tableName] = tableData;
-      } catch (error) {
-        console.error(`Error generating data for ${tableName}:`, error);
-        throw error;
+      } catch (apiErr) {
+        aiErrors.push(`AI generation error ${tableName}: ${apiErr.message}`);
       }
+
+      // If AI failed or returned empty -> deterministic fallback per table
+      if (!Array.isArray(tableData) || tableData.length === 0) {
+        const fallback = generateDeterministicData(
+          { tables: { [tableName]: schema.tables[tableName] } },
+          { globalRowCount: numRecords }
+        );
+        tableData = fallback[tableName] || [];
+      }
+
+      generatedData[tableName] = tableData;
     }
 
+    // Optionally validate whole dataset
+    const validation = validateDeterministicData(schema, generatedData);
+    if (!validation.passed) {
+      console.warn(
+        'Post-generation validation issues (first 10):',
+        validation.errors.slice(0, 10)
+      );
+    }
+    if (aiErrors.length) {
+      console.warn('AI generation issues encountered:', aiErrors.slice(0, 5));
+    }
     return generatedData;
   }
 
