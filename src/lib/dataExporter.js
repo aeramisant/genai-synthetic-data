@@ -88,11 +88,19 @@ class DataExporter {
       }
 
       // Store the dataset
+      // If data came in wrapped meta (deterministic withMeta path), extract generation meta
+      let generationMeta = null;
+      if (data?.meta && data?.data) {
+        generationMeta = { ...data.meta };
+        data = data.data; // unwrap actual table data
+      }
+
       const datasetId = await manager.saveDataset(
         name || `Dataset_${new Date().toISOString()}`,
         description,
         schemaDefinition,
-        data
+        data,
+        generationMeta
       );
 
       return datasetId;

@@ -141,6 +141,17 @@ function inferPrimaryKey(tableName, tblDef) {
   return []; // None inferred
 }
 
+/**
+ * Generate deterministic synthetic data.
+ * @param {Object} schema Parsed schema: { tables: { [tableName]: { columns, primaryKey, foreignKeys } } }
+ * @param {Object} config Options
+ * @param {number} [config.globalRowCount=25] Default row count per table
+ * @param {Object} [config.perTable] Map tableName -> rowCount override
+ * @param {Object} [config.nullProbability] Map of table -> { default, colName -> prob }
+ * @param {number} [config.seed] Seed for reproducible generation
+ * @param {boolean} [config.debug] Force debug logging (or set DEBUG_DATA_GEN=true)
+ * @param {boolean} [config.withMeta] If true returns { data, meta }
+ */
 export function generateDeterministicData(schema, config = {}) {
   const generated = {};
   const fkSources = buildFkSources(schema);
@@ -228,6 +239,40 @@ export function generateDeterministicData(schema, config = {}) {
   });
 
   if (debug) {
+    // Build per-table column stats
+    const tableStats = {};
+    Object.entries(generated).forEach(([tableName, rows]) => {
+      const cols = Object.keys(schema.tables?.[tableName]?.columns || {});
+      const stats = {};
+      cols.forEach((c) => {
+        let nulls = 0;
+        const distinct = new Set();
+        for (let i = 0; i < rows.length; i++) {
+          const v = rows[i][c];
+          if (v === null || v === undefined) nulls++;
+          else distinct.add(v);
+          if (distinct.size > 50) break; // cap distinct tracking to keep light
+        }
+        const samples = [];
+        for (let i = 0; i < rows.length && samples.length < 3; i++) {
+          if (rows[i][c] !== undefined) samples.push(rows[i][c]);
+        }
+        stats[c] = {
+          nulls,
+          nullPct: rows.length ? +((nulls / rows.length) * 100).toFixed(2) : 0,
+          distinct: distinct.size,
+          sample: samples,
+        };
+      });
+      tableStats[tableName] = {
+        rows: rows.length,
+        columns: stats,
+      };
+    });
+    console.log(
+      '[deterministicGenerator] stats:',
+      JSON.stringify(tableStats, null, 2)
+    );
     console.log(
       '[deterministicGenerator] meta summary:',
       JSON.stringify(meta, null, 2)
@@ -242,44 +287,102 @@ export function generateDeterministicData(schema, config = {}) {
   return generated;
 }
 
-export function validateDeterministicData(schema, data) {
+export function validateDeterministicData(schema, data, options = {}) {
   const errors = [];
-  // PK uniqueness & FK presence
+  const debug = options.debug || process.env.DEBUG_DATA_GEN === 'true';
+  const report = {
+    tables: {},
+    summary: { pkDuplicates: 0, fkViolations: 0, notNullViolations: 0 },
+  };
+
   Object.entries(schema.tables || {}).forEach(([table, tblDef]) => {
     const rows = data[table] || [];
-    if (tblDef.primaryKey && tblDef.primaryKey.length === 1) {
-      const pk = tblDef.primaryKey[0];
+    const tReport = {
+      rowCount: rows.length,
+      pkDuplicates: 0,
+      fkViolations: 0,
+      notNullViolations: 0,
+      fkCoverage: [], // { fk: 'col->parent.col', coveredPct }
+    };
+
+    // Primary key uniqueness (single or composite)
+    if (Array.isArray(tblDef.primaryKey) && tblDef.primaryKey.length) {
+      const pkCols = tblDef.primaryKey;
       const seen = new Set();
       rows.forEach((r, idx) => {
-        const v = r[pk];
-        if (v !== undefined && v !== null) {
-          if (seen.has(v))
-            errors.push(`Duplicate PK ${table}.${pk}=${v} (row ${idx})`);
-          seen.add(v);
+        const keyVals = pkCols.map((c) => r[c]);
+        if (keyVals.some((v) => v === null || v === undefined)) return; // skip incomplete pk
+        const compositeKey = JSON.stringify(keyVals);
+        if (seen.has(compositeKey)) {
+          errors.push(
+            `Duplicate PK ${table}(${pkCols.join(
+              ','
+            )})=${compositeKey} (row ${idx})`
+          );
+          tReport.pkDuplicates++;
         }
+        seen.add(compositeKey);
       });
+      report.summary.pkDuplicates += tReport.pkDuplicates;
     }
-    // FKs
+
+    // NOT NULL (columns explicitly marked nullable:false)
+    Object.entries(tblDef.columns || {}).forEach(([colName, colDef]) => {
+      if (colDef.nullable === false) {
+        rows.forEach((r, idx) => {
+          if (r[colName] === null || r[colName] === undefined) {
+            errors.push(`NOT NULL violation ${table}.${colName} (row ${idx})`);
+            tReport.notNullViolations++;
+          }
+        });
+      }
+    });
+    report.summary.notNullViolations += tReport.notNullViolations;
+
+    // Foreign key coverage & violations
     (tblDef.foreignKeys || []).forEach((fk) => {
       const parentTable = fk.referenceTable;
       const parentRows = data[parentTable] || [];
-      const parentIndex = new Map();
-      fk.referenceColumns.forEach((rc) => {
-        parentRows.forEach((pr) => {
-          parentIndex.set(pr[rc], true);
-        });
-      });
-      rows.forEach((r) => {
-        fk.columns.forEach((c, idx) => {
+      // Build index on all referenced columns (only supports single-column & independent columns for coverage simple metric)
+      fk.columns.forEach((c, idx) => {
+        const parentCol = fk.referenceColumns[idx];
+        const index = new Set(
+          parentRows
+            .map((pr) => pr[parentCol])
+            .filter((v) => v !== null && v !== undefined)
+        );
+        let covered = 0;
+        let total = 0;
+        rows.forEach((r) => {
           const val = r[c];
-          if (val !== null && val !== undefined && !parentIndex.has(val)) {
-            errors.push(
-              `FK violation ${table}.${c} -> ${parentTable}.${fk.referenceColumns[idx]} value ${val}`
-            );
+          if (val !== null && val !== undefined) {
+            total++;
+            if (index.has(val)) covered++;
+            else {
+              errors.push(
+                `FK violation ${table}.${c} -> ${parentTable}.${parentCol} value ${val}`
+              );
+              tReport.fkViolations++;
+            }
           }
+        });
+        const pct = total ? +((covered / total) * 100).toFixed(2) : 0;
+        tReport.fkCoverage.push({
+          fk: `${c}->${parentTable}.${parentCol}`,
+          coveredPct: pct,
         });
       });
     });
+    report.summary.fkViolations += tReport.fkViolations;
+    report.tables[table] = tReport;
   });
-  return { passed: errors.length === 0, errors };
+
+  const passed = errors.length === 0;
+  if (debug) {
+    console.log('[validation] report:', JSON.stringify(report, null, 2));
+    if (!passed) {
+      console.log('[validation] firstErrors:', errors.slice(0, 15));
+    }
+  }
+  return { passed, errors, report };
 }

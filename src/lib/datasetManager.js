@@ -12,17 +12,28 @@ class DatasetManager {
     this.outputDir = path.join(process.cwd(), 'output');
   }
 
-  async saveDataset(name, description, schemaDefinition, data) {
+  async saveDataset(
+    name,
+    description,
+    schemaDefinition,
+    data,
+    generationMeta = null
+  ) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
       // Store dataset metadata
       const datasetResult = await client.query(
-        `INSERT INTO generated_datasets (name, description, schema_definition)
-         VALUES ($1, $2, $3)
+        `INSERT INTO generated_datasets (name, description, schema_definition, generation_meta)
+         VALUES ($1, $2, $3, $4)
          RETURNING id`,
-        [name, description, JSON.stringify(schemaDefinition)]
+        [
+          name,
+          description,
+          JSON.stringify(schemaDefinition),
+          generationMeta ? JSON.stringify(generationMeta) : null,
+        ]
       );
 
       const datasetId = datasetResult.rows[0].id;

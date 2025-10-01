@@ -1,31 +1,32 @@
-version: '3.8'
+version: '3.9'
 services:
-  app:
-    build: .
-    ports:
-      - '3000:3000'
-    environment:
-      - NODE_ENV=development
-      - DB_HOST=postgres
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
-      - DB_NAME=synthetic_data
-      - DB_PORT=5432
-    volumes:
-      - .:/usr/src/app
-    depends_on:
-      - postgres
-
-  postgres:
-    image: postgres:14
+  db:
+    image: postgres:15-alpine
     ports:
       - '5432:5432'
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=synthetic_data
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: synthetic_data
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-
+      - pgdata:/var/lib/postgresql/data
+  app:
+    build: .
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/synthetic_data
+      NODE_ENV: development
+      USE_AI: 'true'
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-change_me}
+      GOOGLE_GENAI_MODEL: gemini-2.0-flash-001
+      MODEL_TEMPERATURE: 0.25
+      MAX_ROWS_PER_TABLE: 5000
+      DEFAULT_NUM_RECORDS: 100
+    ports:
+      - '4000:4000'
+    command: ['node', 'src/index.js']
+    volumes:
+      - .:/app
 volumes:
-  postgres_data:
+  pgdata:

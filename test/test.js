@@ -1,7 +1,7 @@
 require('dotenv').config();
-const fs = require('fs').promises;
-const path = require('path');
-const DataGenerator = require('../src/lib/dataGenerator');
+import fs from 'fs/promises';
+import path from 'path';
+import DataGenerator from '../src/lib/dataGenerator.js';
 
 async function test() {
   try {

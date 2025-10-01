@@ -255,6 +255,14 @@ class DataGenerator {
       // Transform the AST into a structured schema
       const schema = this._processAST(ast);
 
+      // If parser produced no tables, attempt naive fallback regardless of AI flag
+      if (!schema.tables || Object.keys(schema.tables).length === 0) {
+        const naive = this._naiveParseDDL(ddlContent);
+        if (naive.tables && Object.keys(naive.tables).length > 0) {
+          return naive;
+        }
+      }
+
       // If AI usage disabled, skip enhancement to avoid network calls
       if (process.env.USE_AI === 'false') {
         if (!schema.tables || Object.keys(schema.tables).length === 0) {
@@ -297,20 +305,38 @@ class DataGenerator {
   }
 
   async generateSyntheticData(schema, instructions, config = {}) {
-    const { numRecords = 100 } = config;
+    const {
+      numRecords = 100,
+      perTableRowCounts = {},
+      nullProbability = {},
+      seed,
+      withMeta = false,
+      debug,
+      temperature,
+    } = config;
     const useAI = process.env.USE_AI !== 'false';
 
     // If AI disabled entirely -> deterministic path
     if (!useAI) {
       const deterministic = generateDeterministicData(schema, {
         globalRowCount: numRecords,
+        perTable: perTableRowCounts,
+        nullProbability,
+        seed,
+        debug,
+        withMeta,
       });
-      const validation = validateDeterministicData(schema, deterministic);
+      const dataOnly = withMeta ? deterministic.data : deterministic;
+      const validation = validateDeterministicData(schema, dataOnly, { debug });
       if (!validation.passed) {
         console.warn(
           'Deterministic generation validation errors:',
           validation.errors.slice(0, 10)
         );
+      }
+      // Attach report if meta requested
+      if (withMeta && deterministic.meta) {
+        deterministic.meta.validation = validation.report;
       }
       return deterministic;
     }
@@ -318,6 +344,28 @@ class DataGenerator {
     const tables = Object.keys(schema.tables);
     const generatedData = {};
     const aiErrors = [];
+
+    // Resolve temperature precedence: config.temperature -> env.MODEL_TEMPERATURE
+    let effectiveTemp = undefined;
+    if (typeof temperature === 'number' && !Number.isNaN(temperature)) {
+      effectiveTemp = Math.min(Math.max(temperature, 0), 1);
+    } else if (
+      process.env.MODEL_TEMPERATURE !== undefined &&
+      !Number.isNaN(Number(process.env.MODEL_TEMPERATURE))
+    ) {
+      effectiveTemp = Math.min(
+        Math.max(Number(process.env.MODEL_TEMPERATURE), 0),
+        1
+      );
+    }
+
+    // Build a model instance with generationConfig if temperature specified
+    const model = this.genAI.getGenerativeModel({
+      model: process.env.GOOGLE_GENAI_MODEL || 'gemini-2.0-flash-001',
+      ...(effectiveTemp !== undefined
+        ? { generationConfig: { temperature: effectiveTemp } }
+        : {}),
+    });
 
     for (const tableName of tables) {
       const prompt = `
@@ -333,9 +381,13 @@ class DataGenerator {
 
       let tableData = [];
       try {
-        const result = await this.model.generateContent(prompt);
+        const result = await model.generateContent(prompt);
         const rawText = result.response.text();
-        const cleanText = cleanGeminiJSON(rawText);
+        // cleanGeminiJSON may return an object/array when it successfully parses;
+        // we only need a string for the subsequent startsWith/endsWith checks.
+        const rawClean = cleanGeminiJSON(rawText, 'array');
+        const cleanText =
+          typeof rawClean === 'string' ? rawClean : JSON.stringify(rawClean);
         try {
           if (cleanText.startsWith('[') && cleanText.endsWith(']')) {
             tableData = JSON.parse(cleanText);
@@ -355,16 +407,37 @@ class DataGenerator {
       if (!Array.isArray(tableData) || tableData.length === 0) {
         const fallback = generateDeterministicData(
           { tables: { [tableName]: schema.tables[tableName] } },
-          { globalRowCount: numRecords }
+          {
+            globalRowCount: perTableRowCounts[tableName] || numRecords,
+            nullProbability: nullProbability[tableName]
+              ? { [tableName]: nullProbability[tableName] }
+              : {},
+            seed,
+            debug,
+          }
         );
         tableData = fallback[tableName] || [];
+        // Absolute guard: if still empty, synthesize minimal rows
+        if (!tableData.length) {
+          const cols = Object.keys(schema.tables[tableName].columns || {});
+          const target = perTableRowCounts[tableName] || numRecords || 1;
+          tableData = Array.from({ length: target }).map((_, i) => {
+            const r = {};
+            cols.forEach((c) => {
+              r[c] = i + 1; // simple placeholder sequence values
+            });
+            return r;
+          });
+        }
       }
 
       generatedData[tableName] = tableData;
     }
 
     // Optionally validate whole dataset
-    const validation = validateDeterministicData(schema, generatedData);
+    const validation = validateDeterministicData(schema, generatedData, {
+      debug,
+    });
     if (!validation.passed) {
       console.warn(
         'Post-generation validation issues (first 10):',
@@ -373,6 +446,16 @@ class DataGenerator {
     }
     if (aiErrors.length) {
       console.warn('AI generation issues encountered:', aiErrors.slice(0, 5));
+    }
+    if (withMeta) {
+      return {
+        data: generatedData,
+        meta: {
+          ai: true,
+          temperature: effectiveTemp,
+          aiErrors,
+        },
+      };
     }
     return generatedData;
   }
