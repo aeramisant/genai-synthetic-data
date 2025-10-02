@@ -8,6 +8,7 @@ import { pool } from './database.js';
 
 // Lightweight in-memory job store (could be replaced by Redis later)
 const jobs = new Map();
+const abortControllers = new Map();
 
 function createJob(kind) {
   const jobId = uuidv4();
@@ -19,6 +20,7 @@ function createJob(kind) {
     error: null,
     result: null,
     createdAt: Date.now(),
+    cancelled: false,
   };
   jobs.set(jobId, job);
   return job;
@@ -40,46 +42,40 @@ export class GenerationService {
     return this.generator.parseDDL(ddl);
   }
 
-  async generate({
-    ddl,
-    instructions = '',
-    config = {},
-    saveName,
-    description,
-  }) {
-    const job = createJob('generate');
-    job.status = 'running';
+  async _executeJob(
+    job,
+    { ddl, instructions, config, saveName, description, callbacks }
+  ) {
+    const controller = abortControllers.get(job.id);
     try {
       const schema = await this.parseDDL(ddl);
       job.progress = 0.1;
-
-      const withMeta = true; // Always gather meta
-      let generationResult;
-
-      // Use unified path: deterministic only if AI disabled, else hybrid per-table inside DataGenerator
-      generationResult = await this.generator.generateSyntheticData(
+      const withMeta = true;
+      const generationResult = await this.generator.generateSyntheticData(
         schema,
         instructions,
-        { ...config, withMeta }
+        {
+          ...config,
+          withMeta,
+          abortSignal: controller?.signal,
+          onTableStart: callbacks?.onTableStart,
+          onTableComplete: callbacks?.onTableComplete,
+          onProgress: callbacks?.onProgress,
+        }
       );
-
       let data;
       let meta = {};
       if (generationResult?.data && generationResult?.meta) {
         data = generationResult.data;
         meta = generationResult.meta ?? {};
       } else {
-        data = generationResult; // AI path returns raw data map
+        data = generationResult;
       }
-
-      // Validate (always deterministic validation pass)
       const validation = validateDeterministicData(schema, data, {
-        debug: config.debug,
+        debug: config?.debug,
       });
       meta = { ...meta, validation: validation.report };
       job.progress = 0.9;
-
-      // Persist if requested
       let datasetId = null;
       if (saveName) {
         datasetId = await this.datasetManager.saveDataset(
@@ -90,7 +86,6 @@ export class GenerationService {
           meta
         );
       }
-
       job.status = 'completed';
       job.progress = 1;
       job.result = {
@@ -102,12 +97,39 @@ export class GenerationService {
           Object.entries(data).map(([t, rows]) => [t, rows.length])
         ),
       };
-      return job.result; // includes jobId for polling
     } catch (err) {
-      job.status = 'error';
-      job.error = err.message;
-      throw err;
+      if (job.cancelled || /aborted/i.test(err.message)) {
+        job.status = 'cancelled';
+        job.error = 'Cancelled';
+      } else {
+        job.status = 'error';
+        job.error = err.message;
+      }
+    } finally {
+      abortControllers.delete(job.id);
     }
+  }
+
+  async generate(params) {
+    const job = createJob('generate');
+    job.status = 'running';
+    abortControllers.set(job.id, new AbortController());
+    await this._executeJob(job, params);
+    if (job.result) return job.result;
+    // throw if ended with error
+    if (job.status === 'error')
+      throw new Error(job.error || 'Generation failed');
+    if (job.status === 'cancelled') throw new Error('Job cancelled');
+    return { jobId: job.id, status: job.status };
+  }
+
+  generateAsync(params) {
+    const job = createJob('generate');
+    job.status = 'running';
+    abortControllers.set(job.id, new AbortController());
+    // Run in background
+    setImmediate(() => this._executeJob(job, params));
+    return { jobId: job.id, status: job.status };
   }
 
   async listDatasets({ limit = 50, offset = 0 } = {}) {
@@ -183,6 +205,37 @@ export class GenerationService {
     );
     if (!res.rows.length) throw new Error('No datasets found');
     return this.getDataset(res.rows[0].id, { includeData });
+  }
+
+  async getDatasetTableSlice(
+    datasetId,
+    tableName,
+    { offset = 0, limit = 50 } = {}
+  ) {
+    // Basic bounds
+    limit = Math.min(Math.max(parseInt(limit, 10) || 0, 0), 1000);
+    offset = Math.max(parseInt(offset, 10) || 0, 0);
+    // Ensure dataset exists (lightweight query)
+    const ds = await pool.query(
+      'SELECT id FROM generated_datasets WHERE id = $1',
+      [datasetId]
+    );
+    if (!ds.rows.length) throw new Error('Dataset not found');
+    // Total count
+    const countRes = await pool.query(
+      'SELECT COUNT(*)::int AS total FROM generated_data WHERE dataset_id = $1 AND table_name = $2',
+      [datasetId, tableName]
+    );
+    const total = countRes.rows[0]?.total || 0;
+    if (total === 0) {
+      return { datasetId, table: tableName, offset, limit, total, rows: [] };
+    }
+    const rowsRes = await pool.query(
+      'SELECT data FROM generated_data WHERE dataset_id = $1 AND table_name = $2 LIMIT $3 OFFSET $4',
+      [datasetId, tableName, limit, offset]
+    );
+    const rows = rowsRes.rows.map((r) => r.data);
+    return { datasetId, table: tableName, offset, limit, total, rows };
   }
 
   async exportDataset(datasetId) {
@@ -277,6 +330,18 @@ export class GenerationService {
     );
     return { db: 'ok', migrations: mig.rows[0] };
   }
+
+  cancelJob(jobId) {
+    const job = jobs.get(jobId);
+    if (!job) return false;
+    if (['completed', 'error', 'cancelled'].includes(job.status)) return false;
+    job.cancelled = true;
+    job.status = 'cancelling';
+    const controller = abortControllers.get(jobId);
+    if (controller) controller.abort();
+    return true;
+  }
 }
 
 export default GenerationService;
+export { jobs };

@@ -313,6 +313,10 @@ class DataGenerator {
       withMeta = false,
       debug,
       temperature,
+      abortSignal,
+      onTableStart,
+      onTableComplete,
+      onProgress,
     } = config;
     const useAI = process.env.USE_AI !== 'false';
 
@@ -367,7 +371,16 @@ class DataGenerator {
         : {}),
     });
 
-    for (const tableName of tables) {
+    for (let i = 0; i < tables.length; i++) {
+      const tableName = tables[i];
+      if (typeof onTableStart === 'function') {
+        try {
+          onTableStart({ table: tableName, index: i, total: tables.length });
+        } catch (_) {}
+      }
+      if (abortSignal?.aborted) {
+        throw new Error('Generation aborted');
+      }
       const prompt = `
         Generate synthetic data for the ${tableName} table.
         Generate ${numRecords} records while maintaining referential integrity.
@@ -381,6 +394,7 @@ class DataGenerator {
 
       let tableData = [];
       try {
+        if (abortSignal?.aborted) throw new Error('Generation aborted');
         const result = await model.generateContent(prompt);
         const rawText = result.response.text();
         // cleanGeminiJSON may return an object/array when it successfully parses;
@@ -432,6 +446,26 @@ class DataGenerator {
       }
 
       generatedData[tableName] = tableData;
+      if (typeof onTableComplete === 'function') {
+        try {
+          onTableComplete({
+            table: tableName,
+            index: i,
+            total: tables.length,
+            rows: tableData.length,
+          });
+        } catch (_) {}
+      }
+      if (typeof onProgress === 'function') {
+        try {
+          onProgress({
+            phase: 'tables',
+            completed: i + 1,
+            total: tables.length,
+            ratio: (i + 1) / tables.length,
+          });
+        } catch (_) {}
+      }
     }
 
     // Optionally validate whole dataset

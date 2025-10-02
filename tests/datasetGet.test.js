@@ -14,7 +14,19 @@ describe('GET /api/datasets/:id', () => {
         saveName: 'jest_get_dataset',
       })
       .expect(200);
-    datasetId = gen.body.datasetId;
+    expect(gen.body.jobId).toBeTruthy();
+    // Poll job
+    let attempt = 0;
+    while (attempt < 25) {
+      const jr = await request(app).get(`/api/jobs/${gen.body.jobId}`);
+      if (jr.body.status === 'completed') {
+        datasetId = jr.body.result.datasetId;
+        break;
+      }
+      if (['error', 'cancelled'].includes(jr.body.status)) break;
+      attempt += 1;
+      await new Promise((r) => setTimeout(r, 100));
+    }
     expect(datasetId).toBeDefined();
 
     const res = await request(app)

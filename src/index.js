@@ -9,6 +9,7 @@ import morgan from 'morgan';
 import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import rateLimit from 'express-rate-limit';
 import { setupDatabase } from './lib/database.js';
 import { initializeLangfuse } from './lib/monitoring.js';
 import DataGenerator from './lib/dataGenerator.js';
@@ -28,6 +29,72 @@ const dataGenerator = new DataGenerator();
 const datasetManager = new DatasetManager();
 const generationService = new GenerationService();
 
+// Simple in-memory concurrency cap
+const MAX_CONCURRENT_GENERATIONS = Number(
+  process.env.MAX_CONCURRENT_GENERATIONS || 3
+);
+let activeGenerations = 0;
+
+// In-memory socket job subscription registry
+const jobSubscribers = new Map(); // jobId -> Set<socket>
+const jobWatchers = new Map(); // jobId -> timeout handle
+
+function removeSocketFromAllJobs(socket) {
+  for (const [jobId, set] of jobSubscribers.entries()) {
+    if (set.has(socket)) {
+      set.delete(socket);
+      if (set.size === 0) jobSubscribers.delete(jobId);
+    }
+  }
+}
+
+function emitToJob(jobId, event, payload) {
+  const subs = jobSubscribers.get(jobId);
+  if (!subs) return;
+  for (const sock of subs) {
+    try {
+      sock.emit(event, { jobId, ...payload });
+    } catch (_) {
+      /* ignore emit errors */
+    }
+  }
+}
+
+function monitorJobLifecycle(jobId) {
+  if (jobWatchers.has(jobId)) return; // already watching
+  const tick = () => {
+    const job = getJob(jobId);
+    if (!job) {
+      jobWatchers.delete(jobId);
+      return;
+    }
+    emitToJob(jobId, 'job:status', {
+      status: job.status,
+      progress: job.progress,
+      error: job.error,
+    });
+    if (['completed', 'error', 'cancelled'].includes(job.status)) {
+      emitToJob(jobId, 'job:completed', {
+        status: job.status,
+        result: job.result
+          ? {
+              datasetId: job.result.datasetId,
+              rowCounts: job.result.rowCounts,
+              validation: job.result.validation,
+            }
+          : null,
+        error: job.error,
+      });
+      jobWatchers.delete(jobId);
+      return;
+    }
+    // reschedule
+    const handle = setTimeout(tick, 700);
+    jobWatchers.set(jobId, handle);
+  };
+  tick();
+}
+
 function buildSocketServer(server) {
   const io = new SocketIOServer(server, {
     cors: {
@@ -41,6 +108,52 @@ function buildSocketServer(server) {
 
   io.on('connection', (socket) => {
     console.log('New client connected');
+
+    // Job subscription management -------------------------------------------------
+    socket.on('subscribe:job', ({ jobId } = {}) => {
+      if (!jobId) return socket.emit('job:error', { error: 'jobId required' });
+      if (!jobSubscribers.has(jobId)) jobSubscribers.set(jobId, new Set());
+      jobSubscribers.get(jobId).add(socket);
+      socket.emit('job:subscribed', { jobId });
+      const job = getJob(jobId);
+      if (job) {
+        socket.emit('job:status', {
+          jobId,
+          status: job.status,
+          progress: job.progress,
+          error: job.error,
+        });
+        if (['completed', 'error', 'cancelled'].includes(job.status)) {
+          socket.emit('job:completed', {
+            jobId,
+            status: job.status,
+            result: job.result
+              ? {
+                  datasetId: job.result.datasetId,
+                  rowCounts: job.result.rowCounts,
+                  validation: job.result.validation,
+                }
+              : null,
+            error: job.error,
+          });
+        } else {
+          monitorJobLifecycle(jobId);
+        }
+      } else {
+        // monitor in case job appears shortly after (race window)
+        monitorJobLifecycle(jobId);
+      }
+    });
+
+    socket.on('unsubscribe:job', ({ jobId } = {}) => {
+      if (!jobId) return;
+      const subs = jobSubscribers.get(jobId);
+      if (subs) {
+        subs.delete(socket);
+        if (subs.size === 0) jobSubscribers.delete(jobId);
+      }
+      socket.emit('job:unsubscribed', { jobId });
+    });
 
     socket.on('generateData', async (payload = {}) => {
       const startTs = Date.now();
@@ -193,6 +306,7 @@ function buildSocketServer(server) {
 
     socket.on('disconnect', () => {
       console.log('Client disconnected');
+      removeSocketFromAllJobs(socket);
     });
   });
   return io;
@@ -215,6 +329,15 @@ app.use(cors());
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../client/build')));
+
+// Rate limiting (focus on heavy endpoints)
+const heavyLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 30),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Rate limit exceeded. Try again shortly.' },
+});
 
 // Initialize services (don't block server start; log failures)
 setupDatabase().catch((e) => {
@@ -251,8 +374,11 @@ app.post('/api/upload', upload.single('schema'), (req, res) => {
   }
 });
 
-app.post('/api/generate', async (req, res, next) => {
+app.post('/api/generate', heavyLimiter, async (req, res, next) => {
   try {
+    if (activeGenerations >= MAX_CONCURRENT_GENERATIONS) {
+      return res.status(429).json({ error: 'Too many concurrent generations' });
+    }
     const {
       ddl,
       instructions,
@@ -284,14 +410,55 @@ app.post('/api/generate', async (req, res, next) => {
         Math.min(Math.max(temperature, 0), 1)
       );
     }
-    const result = await generationService.generate({
-      ddl,
-      instructions,
-      config,
-      saveName,
-      description,
-    });
-    res.json(result);
+    activeGenerations += 1;
+    try {
+      // We capture jobId post-call; callbacks close over mutable ref.
+      let jobIdRef = null;
+      const callbacks = {
+        onTableStart: ({ table, index, total }) => {
+          if (!jobIdRef) return; // not yet assigned
+          emitToJob(jobIdRef, 'job:tableStart', { table, index, total });
+        },
+        onTableComplete: ({ table, index, total, rows }) => {
+          if (!jobIdRef) return;
+          emitToJob(jobIdRef, 'job:tableComplete', {
+            table,
+            index,
+            total,
+            rows,
+          });
+        },
+        onProgress: ({ phase, completed, total, ratio }) => {
+          if (!jobIdRef) return;
+          // Update job.progress using heuristic mapping (0.1 -> 0.9 window)
+          const job = getJob(jobIdRef);
+          if (job && job.status === 'running') {
+            const scaled = 0.1 + 0.7 * ratio; // leave headroom for validation/persist
+            if (scaled > job.progress) job.progress = scaled;
+          }
+          emitToJob(jobIdRef, 'job:progress', {
+            phase,
+            completed,
+            total,
+            ratio,
+            progress: getJob(jobIdRef)?.progress,
+          });
+        },
+      };
+      const asyncJob = generationService.generateAsync({
+        ddl,
+        instructions,
+        config,
+        saveName,
+        description,
+        callbacks,
+      });
+      jobIdRef = asyncJob.jobId; // assign after call; setImmediate ensures safety
+      monitorJobLifecycle(jobIdRef); // ensure lifecycle events even if no subscriber yet
+      res.json(asyncJob); // returns jobId immediately
+    } finally {
+      activeGenerations = Math.max(0, activeGenerations - 1);
+    }
   } catch (e) {
     next(e);
   }
@@ -361,6 +528,25 @@ app.get('/api/datasets/:id(\\d+)', async (req, res, next) => {
   }
 });
 
+// Table slice pagination for large datasets
+app.get('/api/datasets/:id(\\d+)/table/:tableName', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const tableName = req.params.tableName;
+    const offset = parseInt(req.query.offset || '0', 10);
+    const limit = parseInt(req.query.limit || '50', 10);
+    const slice = await generationService.getDatasetTableSlice(id, tableName, {
+      offset,
+      limit,
+    });
+    res.json(slice);
+  } catch (e) {
+    if (/not found/i.test(e.message))
+      return res.status(404).json({ error: e.message });
+    next(e);
+  }
+});
+
 app.get('/api/datasets/:id/export', async (req, res, next) => {
   try {
     const id = Number(req.params.id);
@@ -371,7 +557,7 @@ app.get('/api/datasets/:id/export', async (req, res, next) => {
   }
 });
 
-app.post('/api/datasets/:id/modify', async (req, res, next) => {
+app.post('/api/datasets/:id/modify', heavyLimiter, async (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const { prompt, tableName } = req.body || {};
@@ -420,6 +606,18 @@ let activeServer; // track for graceful shutdown
 
 function startServer(port, retries = 5) {
   const server = http.createServer(app);
+
+  // Job cancellation endpoint
+  app.delete('/api/jobs/:id/cancel', (req, res) => {
+    const job = getJob(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (['completed', 'error', 'cancelled'].includes(job.status)) {
+      return res.status(400).json({ error: 'Job not cancellable' });
+    }
+    const ok = generationService.cancelJob(req.params.id);
+    if (!ok) return res.status(400).json({ error: 'Unable to cancel' });
+    res.json({ status: 'cancelling' });
+  });
   // Attach error handler first to capture immediate EADDRINUSE
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
