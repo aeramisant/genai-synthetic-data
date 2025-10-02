@@ -1,4 +1,4 @@
-import { pool } from '../lib/database.js';
+import { pool } from './database.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';

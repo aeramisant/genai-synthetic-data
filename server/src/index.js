@@ -1,5 +1,23 @@
 import dotenv from 'dotenv';
+// Primary load (uses current working directory). If server started from inside
+// the server folder this will pick up server/.env automatically.
 dotenv.config();
+// Fallback: if key vars are still missing (e.g. process started from repo root),
+// attempt to load the .env file that sits alongside this source file.
+if (!process.env.GEMINI_API_KEY) {
+  try {
+    const envPath = new URL('../.env', import.meta.url).pathname;
+    const alt = dotenv.config({ path: envPath });
+    if (alt.error) {
+      // non-fatal; just log once
+      console.warn('Fallback .env load failed:', alt.error.message);
+    } else if (alt.parsed) {
+      console.log('Loaded environment from server/.env (fallback)');
+    }
+  } catch (e) {
+    console.warn('Fallback .env resolution error:', e.message);
+  }
+}
 
 import express from 'express';
 import http from 'http';
@@ -81,6 +99,9 @@ function monitorJobLifecycle(jobId) {
               datasetId: job.result.datasetId,
               rowCounts: job.result.rowCounts,
               validation: job.result.validation,
+              temperature: job.result.meta?.temperature,
+              aiErrors: job.result.meta?.aiErrors,
+              normalized: job.result.meta?.normalized,
             }
           : null,
         error: job.error,
@@ -132,6 +153,9 @@ function buildSocketServer(server) {
                   datasetId: job.result.datasetId,
                   rowCounts: job.result.rowCounts,
                   validation: job.result.validation,
+                  temperature: job.result.meta?.temperature,
+                  aiErrors: job.result.meta?.aiErrors,
+                  normalized: job.result.meta?.normalized,
                 }
               : null,
             error: job.error,
@@ -483,6 +507,10 @@ app.get('/api/jobs/:id', (req, res) => {
           datasetId: result.datasetId,
           validation: result.validation?.summary || result.validation,
           rowCounts: result.rowCounts,
+          temperature: result.meta?.temperature,
+          aiErrors: result.meta?.aiErrors,
+          normalized: result.meta?.normalized,
+          normalizationError: result.meta?.normalizationError,
         }
       : null,
   });

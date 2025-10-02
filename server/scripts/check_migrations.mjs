@@ -1,4 +1,4 @@
-import { setupDatabase, pool } from '../src/lib/database.js';
+import { setupDatabase, pool } from '../server/src/lib/database.js';
 
 (async () => {
   try {

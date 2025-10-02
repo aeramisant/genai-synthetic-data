@@ -1,7 +1,7 @@
-import DataGenerator from '../src/lib/dataGenerator.js';
-import DataExporter from '../src/lib/dataExporter.js';
+import DataGenerator from '../server/src/lib/dataGenerator.js';
+import DataExporter from '../server/src/lib/dataExporter.js';
 import fs from 'fs';
-import { pool, setupDatabase } from '../src/lib/database.js';
+import { pool, setupDatabase } from '../server/src/lib/database.js';
 
 (async () => {
   try {

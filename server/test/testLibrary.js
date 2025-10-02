@@ -1,7 +1,7 @@
 require('dotenv').config();
 const fs = require('fs').promises;
 const path = require('path');
-const DataGenerator = require('../src/lib/dataGenerator');
+const DataGenerator = require('../../src/lib/dataGenerator');
 
 async function testLibrarySystem() {
   try {

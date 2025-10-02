@@ -5,6 +5,7 @@ import { validateDeterministicData } from './deterministicGenerator.js';
 import DataModifier from './dataModifier.js';
 import DataExporter from './dataExporter.js';
 import { pool } from './database.js';
+import { normalizeDataset } from './schemaNormalizer.js';
 
 // Lightweight in-memory job store (could be replaced by Redis later)
 const jobs = new Map();
@@ -70,6 +71,16 @@ export class GenerationService {
         meta = generationResult.meta ?? {};
       } else {
         data = generationResult;
+      }
+      // Normalize AI generated data to align strictly with schema columns (drop extras, fill missing)
+      try {
+        if (meta.ai || (process.env.USE_AI !== 'false' && meta.ai !== false)) {
+          data = normalizeDataset(schema, data);
+          meta.normalized = true;
+        }
+      } catch (normErr) {
+        // Record (non-fatal) normalization issue for visibility
+        meta.normalizationError = normErr.message;
       }
       const validation = validateDeterministicData(schema, data, {
         debug: config?.debug,

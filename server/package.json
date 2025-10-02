@@ -2,14 +2,18 @@
   "name": "synthetic-data-generator",
   "version": "1.0.0",
   "description": "Synthetic Data Generation and Query Project using Gemini",
-  "main": "src/index.js",
   "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "license": "MIT",
   "scripts": {
     "start": "node src/index.js",
+    "start:prod": "NODE_ENV=production node src/index.js",
     "dev": "nodemon src/index.js",
-    "client": "cd client && npm start",
-    "build": "cd client && npm run build",
-    "test": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest",
+    "test": "USE_AI=false NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules node --experimental-vm-modules ./node_modules/jest/bin/jest.js",
+    "test:generate": "USE_AI=false NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runTestsByPath tests/generate.test.js",
     "check:migrations": "node scripts/check_migrations.mjs"
   },
   "dependencies": {
