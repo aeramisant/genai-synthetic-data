@@ -1,0 +1,33 @@
+.schema-upload {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.schema-upload .upload-button {
+  background-color: #f0f0f0;
+  color: #333;
+  padding: 12px 20px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background-color 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.schema-upload .upload-button i {
+  margin-right: 10px;
+}
+
+.schema-upload .upload-button:hover {
+  background-color: #e0e0e0;
+}
+
+.schema-upload .supported-formats {
+  color: #777;
+  font-size: 14px;
+}
