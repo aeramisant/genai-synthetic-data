@@ -9,14 +9,11 @@ import './DataGeneration.css';
 function DataGeneration() {
   const [ddlSchema, setDdlSchema] = useState('');
   const [temperature, setTemperature] = useState(0.7);
-  const [maxTokens, setMaxTokens] = useState(2048);
+  const [maxTokens, setMaxTokens] = useState(500);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
-  const [persistConfig, setPersistConfig] = useState<{
-    persist: boolean;
-    datasetName: string;
-  }>({ persist: true, datasetName: '' });
+  // Persist toggle removed; we always persist with an auto name
 
   const handleGenerate = async () => {
     if (!ddlSchema) {
@@ -37,12 +34,9 @@ function DataGeneration() {
           numRecords: 10,
         },
       };
-      if (persistConfig.persist) {
-        const autoName = `run_${Date.now()}`;
-        const saveName = (persistConfig.datasetName || '').trim() || autoName;
-        payload.saveName = saveName;
-        payload.description = 'Generated via UI (manual trigger)';
-      }
+      const autoName = `run_${Date.now()}`;
+      payload.saveName = autoName;
+      payload.description = 'Generated via UI (auto-persist Phase1)';
 
       const response = await fetch('http://localhost:4000/api/generate', {
         method: 'POST',
@@ -72,10 +66,7 @@ function DataGeneration() {
       <div className="form-section">
         <h2>Data Generation</h2>
         <PromptInput />
-        <SchemaUpload
-          onSchemaLoad={setDdlSchema}
-          onPersistConfigChange={(cfg) => setPersistConfig(cfg)}
-        />
+        <SchemaUpload onSchemaLoad={setDdlSchema} />
         {ddlSchema && (
           <div className="schema-preview">
             <pre>{ddlSchema}</pre>

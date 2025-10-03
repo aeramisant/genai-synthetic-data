@@ -38,6 +38,7 @@ import {
   validateDeterministicData,
 } from './lib/deterministicGenerator.js';
 import GenerationService, { getJob } from './lib/generationService.js';
+import { CONFIG } from './lib/config.js';
 import { errorHandler, notFound } from './middleware/errorHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -656,10 +657,11 @@ app.post('/api/test-data', async (req, res, next) => {
 // UI configuration / limits endpoint
 app.get('/api/config', (_req, res) => {
   res.json({
-    maxRowsPerTable: Number(process.env.MAX_ROWS_PER_TABLE || 5000),
-    defaultNumRecords: Number(process.env.DEFAULT_NUM_RECORDS || 100),
+    maxRowsPerTable: CONFIG.MAX_ROWS_PER_TABLE,
+    defaultNumRecords: CONFIG.DEFAULT_NUM_RECORDS,
     aiEnabled: process.env.USE_AI !== 'false',
     model: process.env.GOOGLE_GENAI_MODEL || 'gemini-2.0-flash-001',
+    configurableRows: false,
   });
 });
 

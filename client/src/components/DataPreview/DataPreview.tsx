@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
+import RawMetaViewer from './RawMetaViewer';
 import DataTable from './DataTable';
 import QuickEdit from './QuickEdit';
 import './DataPreview.css';
@@ -44,8 +45,7 @@ function DataPreview({ jobId }: DataPreviewProps) {
   const pollRef = useRef<number | null>(null);
   const [datasetId, setDatasetId] = useState<number | null>(null);
   const [jobCompleted, setJobCompleted] = useState(false);
-  const [showRaw, setShowRaw] = useState(false);
-  const [showValidationDetails, setShowValidationDetails] = useState(false);
+  // Raw/meta/validation visualization moved into RawMetaViewer to isolate removable debug UI
 
   // Clear polling on unmount
   useEffect(() => {
@@ -146,6 +146,8 @@ function DataPreview({ jobId }: DataPreviewProps) {
       string,
       ValidationTableReport
     >) || {};
+  const maxTokensApplied =
+    (dataset?.meta?.maxTokensApplied as number) || undefined;
 
   return (
     <div className="data-preview">
@@ -170,6 +172,11 @@ function DataPreview({ jobId }: DataPreviewProps) {
         <div style={{ margin: '10px 0', fontSize: '0.8rem' }}>
           <strong>Validation:</strong> PK dup: {pkDuplicates} | FK viol:{' '}
           {fkViolations} | NOT NULL viol: {notNullViolations}
+          {maxTokensApplied !== undefined && (
+            <span style={{ marginLeft: 8 }}>
+              | maxTokensApplied: {maxTokensApplied}
+            </span>
+          )}
           {fkViolations > 0 && (
             <span style={{ color: '#c0392b', marginLeft: 8 }}>
               Check foreign key generation logic
@@ -203,24 +210,7 @@ function DataPreview({ jobId }: DataPreviewProps) {
             </label>
           </div>
         )}
-        {dataset && (
-          <button
-            type="button"
-            style={{ padding: '6px 10px', fontSize: '0.75rem' }}
-            onClick={() => setShowRaw((r) => !r)}>
-            {showRaw ? 'Hide Raw JSON' : 'Show Raw JSON'}
-          </button>
-        )}
-        {dataset && (
-          <button
-            type="button"
-            style={{ padding: '6px 10px', fontSize: '0.75rem' }}
-            onClick={() => setShowValidationDetails((v) => !v)}>
-            {showValidationDetails
-              ? 'Hide Validation Details'
-              : 'Show Validation Details'}
-          </button>
-        )}
+        {/* Debug buttons removed; consolidated in RawMetaViewer cycle button */}
       </div>
       <div className="table-container">
         {rows && rows.length > 0 ? (
@@ -232,98 +222,22 @@ function DataPreview({ jobId }: DataPreviewProps) {
           </div>
         )}
       </div>
-      {showRaw && dataset?.data && (
-        <div style={{ marginTop: '16px', width: '100%' }}>
-          <h3 style={{ margin: '4px 0' }}>Raw Dataset JSON</h3>
-          <pre
-            style={{
-              maxHeight: '340px',
-              overflow: 'auto',
-              background: '#1e1e1e',
-              color: '#eee',
-              padding: '12px',
-              fontSize: '0.7rem',
-              borderRadius: 6,
-            }}>
-            {JSON.stringify(dataset.data, null, 2)}
-          </pre>
-        </div>
-      )}
-      {showValidationDetails && dataset && (
-        <div style={{ marginTop: '18px', width: '100%' }}>
-          <h3 style={{ margin: '4px 0' }}>Validation Details</h3>
-          <div
-            style={{
-              display: 'grid',
-              gap: '8px',
-              gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))',
-            }}>
-            {Object.entries(validationTables).map(([table, info]) => {
-              const fkCoverage = (info?.fkCoverage || []) as Array<{
-                fk: string;
-                coveredPct: number;
-              }>;
-              return (
-                <div
-                  key={table}
-                  style={{
-                    border: '1px solid #333',
-                    padding: 8,
-                    borderRadius: 6,
-                    background: '#111',
-                  }}>
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                    {table}
-                  </div>
-                  <div style={{ fontSize: '0.65rem', lineHeight: 1.4 }}>
-                    Rows: {info?.rowCount ?? 0}
-                    <br />
-                    PK duplicates: {info?.pkDuplicates ?? 0}
-                    <br />
-                    FK violations: {info?.fkViolations ?? 0}
-                    <br />
-                    NOT NULL violations: {info?.notNullViolations ?? 0}
-                    {fkCoverage.length > 0 && (
-                      <div style={{ marginTop: 4 }}>
-                        <strong>FK coverage</strong>
-                        {fkCoverage.map((fk) => (
-                          <div
-                            key={fk.fk}
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                            }}>
-                            <span>{fk.fk}</span>
-                            <span
-                              style={{
-                                color:
-                                  fk.coveredPct === 100
-                                    ? '#2ecc71'
-                                    : fk.coveredPct > 60
-                                    ? '#f1c40f'
-                                    : '#e74c3c',
-                              }}>
-                              {fk.coveredPct}%
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {fkViolations > 0 && (
-            <div
-              style={{ marginTop: 12, fontSize: '0.7rem', color: '#e67e22' }}>
-              Tip: High FK violations often mean referenced parent rows were not
-              generated first or key values (like author_id) are missing.
-              Consider a post-processing pass to assign sequential IDs when AI
-              omits them.
-            </div>
-          )}
-        </div>
+      {dataset && (
+        <RawMetaViewer
+          data={dataset.data}
+          meta={dataset.meta as Record<string, unknown>}
+          validationTables={
+            validationTables as Record<string, { [k: string]: unknown }>
+          }
+          validationSummary={
+            validationSummary as {
+              [k: string]: unknown;
+              fkViolations?: number;
+              pkDuplicates?: number;
+              notNullViolations?: number;
+            }
+          }
+        />
       )}
       <QuickEdit />
     </div>

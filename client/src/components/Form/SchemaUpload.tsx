@@ -3,21 +3,12 @@ import './SchemaUpload.css';
 
 interface SchemaUploadProps {
   onSchemaLoad?: (schema: string) => void;
-  onPersistConfigChange?: (cfg: {
-    persist: boolean;
-    datasetName: string;
-  }) => void;
 }
 
-function SchemaUpload({
-  onSchemaLoad,
-  onPersistConfigChange,
-}: SchemaUploadProps) {
+function SchemaUpload({ onSchemaLoad }: SchemaUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [persist, setPersist] = useState<boolean>(true);
-  const [datasetName, setDatasetName] = useState<string>('');
   const [isReading, setIsReading] = useState<boolean>(false);
 
   const handleFileSelect = async (file: File) => {
@@ -103,42 +94,7 @@ function SchemaUpload({
           Supported formats: SQL, DDL, TXT
         </span>
       </button>
-      <div className="persist-controls">
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            marginTop: '12px',
-          }}>
-          <input
-            type="checkbox"
-            checked={persist}
-            onChange={(e) => {
-              const val = e.target.checked;
-              setPersist(val);
-              onPersistConfigChange?.({ persist: val, datasetName });
-            }}
-          />
-          Persist dataset
-        </label>
-        {persist && (
-          <div style={{ marginTop: '8px' }}>
-            <input
-              type="text"
-              placeholder="Optional dataset name (auto if blank)"
-              value={datasetName}
-              onChange={(e) => {
-                const val = e.target.value;
-                setDatasetName(val);
-                onPersistConfigChange?.({ persist, datasetName: val });
-              }}
-              style={{ width: '100%', padding: '6px 8px', fontSize: '0.9rem' }}
-              disabled={isReading}
-            />
-          </div>
-        )}
-      </div>
+      {/* Persist controls removed: dataset is always persisted with an auto-generated name now */}
       {error && <div className="upload-error">{error}</div>}
     </div>
   );
