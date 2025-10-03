@@ -240,3 +240,30 @@ Priority suggestions (fastest impact first):
 5. Structured output or stronger JSON schema enforcement
 6. Dockerization + README update
 7. Observability (Langfuse) + performance profiling
+
+/// >>>>>>>>>>>>>>>> nexc iteration : 
+Implementation Order Recap
+
+(1) Retry
+Adds resilience: a single low‑temperature retry on malformed or empty AI output reduces silent fallbacks and improves dataset quality without user intervention.
+
+(2) Repair Toggle
+Lets users opt into constraint fixes (FK/PK alignment) while keeping default raw mode; satisfies spec requirement for integrity without forcing post‑processing.
+
+(3) Structured Output
+Reduces parsing fragility by enforcing or validating strict JSON arrays of objects; lowers downstream error handling and increases reliability of meta/validation.
+
+(4) Row Hints UI
+Exposes advisory target row counts (global + optional per-table) so users can steer dataset scale explicitly instead of burying hints inside free‑form prompt text.
+
+(5) Langfuse
+Provides observability (timings, retry flags, integrity toggle usage, row counts) enabling performance tuning, debugging, and future quality benchmarks.
+
+(6) Docker/Compose
+Ensures reproducible, one‑command environment (app + Postgres) for teammates and deployment; reduces “works on my machine” drift.
+
+(7) README
+Aligns expectations: documents decisions (no streaming in Phase 1), usage instructions, environment variables, and roadmap—critical for handoff and review.
+
+(8) Optional Metadata Panel
+Improves transparency by surfacing prompt hash, retries, integrity status, row hints, and token info—helps users trust and audit generation outcomes.

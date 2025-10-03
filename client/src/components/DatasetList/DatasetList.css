@@ -57,12 +57,12 @@
   border: 1px solid #ccc;
   border-radius: 4px;
   cursor: pointer;
-  width: 26px;
-  height: 26px;
+  padding: 0.5rem;
   line-height: 1;
+  color: #555;
 }
 .refresh-btn:hover {
-  background: #f0f0f0;
+  background: #1e63c3;
 }
 .error {
   color: #c0392b;

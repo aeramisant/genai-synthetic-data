@@ -4,7 +4,7 @@
 
 export const CONFIG = {
   DEFAULT_NUM_RECORDS: 10, // default rows per table
-  MAX_ROWS_PER_TABLE: 10, // hard cap (Phase 1 scope)
+  MAX_ROWS_PER_TABLE: 1000, // allow advisory higher counts (Phase 1 expanded scope)
   AI_TABLE_TIMEOUT_MS: 25000, // still tweakable later if needed
 };
 

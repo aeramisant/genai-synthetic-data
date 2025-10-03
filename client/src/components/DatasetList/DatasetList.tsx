@@ -41,6 +41,22 @@ function DatasetList({ onSelect, activeId }: DatasetListProps) {
     load();
   }, [load]);
 
+  // Listen for newly created datasets to auto-refresh and select
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ id?: number }>;
+      const newId = ce.detail?.id;
+      if (!newId) return;
+      (async () => {
+        await load();
+        onSelect(newId);
+      })();
+    };
+    window.addEventListener('dataset:created', handler as EventListener);
+    return () =>
+      window.removeEventListener('dataset:created', handler as EventListener);
+  }, [load, onSelect]);
+
   return (
     <div className="dataset-list">
       <div className="dataset-list-header">

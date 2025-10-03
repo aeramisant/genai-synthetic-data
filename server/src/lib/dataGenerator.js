@@ -9,6 +9,51 @@ import { applyEnumSampling } from './enumSampler.js';
 import { CONFIG, effectiveTemperature, clampRowCount } from './config.js';
 import { autoRepairForeignKeys } from './foreignKeyRepair.js';
 
+// Validate and sanitize AI-produced table array
+function validateArrayRecords(_tableName, value) {
+  const adjustments = {
+    removedNonObject: 0,
+    removedNullish: 0,
+    coercedPrimitives: 0,
+    truncatedObjects: 0,
+    totalInput: Array.isArray(value) ? value.length : 0,
+  };
+  if (!Array.isArray(value))
+    return { rows: [], adjustments: { ...adjustments, note: 'not_array' } };
+  const rows = [];
+  for (const r of value) {
+    if (r === null || r === undefined) {
+      adjustments.removedNullish++;
+      continue;
+    }
+    if (typeof r !== 'object') {
+      // Attempt to coerce primitive into object with a synthetic column
+      if (
+        typeof r === 'string' ||
+        typeof r === 'number' ||
+        typeof r === 'boolean'
+      ) {
+        rows.push({ value: r });
+        adjustments.coercedPrimitives++;
+      } else {
+        adjustments.removedNonObject++;
+      }
+      continue;
+    }
+    // Shallow clone & truncate very large objects (safety)
+    const keys = Object.keys(r);
+    if (keys.length > 80) {
+      const limited = {};
+      for (let i = 0; i < 80; i++) limited[keys[i]] = r[keys[i]];
+      rows.push(limited);
+      adjustments.truncatedObjects++;
+    } else {
+      rows.push(r);
+    }
+  }
+  return { rows, adjustments };
+}
+
 // Simple topological ordering based on foreign key references (single-column only, best-effort)
 function orderTablesForGeneration(schema) {
   const deps = {}; // table -> set(child)
@@ -131,6 +176,7 @@ class DataGenerator {
       onTableStart,
       onTableComplete,
       onProgress,
+      structuredJSON = true,
     } = config;
     const useAI = process.env.USE_AI !== 'false';
 
@@ -173,6 +219,7 @@ class DataGenerator {
     const effectiveGlobal = clampRowCount(numRecords);
     const generatedData = {};
     const aiErrors = [];
+    const retriesMeta = {}; // per-table retry audit
 
     const effectiveTemp = effectiveTemperature(temperature);
     // Clamp max tokens within a reasonable bound (Gemini limits vary; choose conservative upper bound)
@@ -211,18 +258,24 @@ class DataGenerator {
         generatedData[tableName] = [];
         continue;
       }
-      const prompt = `
-        Generate synthetic data for the ${tableName} table.
-  Generate ${effectiveGlobal} records while maintaining referential integrity.
-        Table Schema: ${JSON.stringify(tableSchema, null, 2)}
-        Full Schema Context: ${JSON.stringify(schema, null, 2)}
-        Additional Instructions: ${
-          instructions || 'Generate realistic and consistent data'
-        }
-        Return ONLY a JSON array of records for the ${tableName} table.
-        IMPORTANT: Return only the JSON array without any markdown formatting or code blocks.`;
+      const prompt = `Generate synthetic data for the ${tableName} table.
+Target row count (soft suggestion): about ${effectiveGlobal} rows (it's OK if you produce more or fewer if it improves relational realism).
+Table Schema: ${JSON.stringify(tableSchema, null, 2)}
+Full Schema Context: ${JSON.stringify(schema, null, 2)}
+Additional Instructions: ${
+        instructions || 'Generate realistic and consistent data'
+      }
+Return ONLY a JSON array of records for the ${tableName} table.
+IMPORTANT: Return only the JSON array without any markdown formatting or code blocks.`;
 
       let tableData = [];
+      let firstAttemptRows = 0;
+      let retrySucceeded = false;
+      const firstErrors = [];
+      const retryErrors = [];
+      let retryReason = '';
+      let parseAdjustments = null;
+      let retryParseAdjustments = null;
       try {
         if (abortSignal?.aborted) throw new Error('Generation aborted');
         const timeoutMs = CONFIG.AI_TABLE_TIMEOUT_MS;
@@ -264,12 +317,124 @@ class DataGenerator {
             const parsed = JSON.parse(cleanText);
             tableData = parsed[tableName] || Object.values(parsed)[0] || [];
           }
+          if (structuredJSON) {
+            const v = validateArrayRecords(tableName, tableData);
+            parseAdjustments = v.adjustments;
+            tableData = v.rows;
+          }
         } catch (parseErr) {
-          aiErrors.push(`Parse error ${tableName}: ${parseErr.message}`);
+          const msg = `Parse error ${tableName}: ${parseErr.message}`;
+          aiErrors.push(msg);
+          firstErrors.push(msg);
           tableData = [];
         }
       } catch (apiErr) {
-        aiErrors.push(`AI generation error ${tableName}: ${apiErr.message}`);
+        const msg = `AI generation error ${tableName}: ${apiErr.message}`;
+        aiErrors.push(msg);
+        firstErrors.push(msg);
+      }
+      firstAttemptRows = Array.isArray(tableData) ? tableData.length : 0;
+
+      // Retry logic: if first attempt produced no usable rows -> one retry with lowered temperature
+      if ((!Array.isArray(tableData) || tableData.length === 0) && this.genAI) {
+        retryReason = 'empty_or_parse';
+        let retryTemp;
+        if (effectiveTemp !== undefined) {
+          retryTemp = Math.max(0.1, Number((effectiveTemp * 0.7).toFixed(2)));
+        } else {
+          retryTemp = 0.3; // fallback conservative temperature
+        }
+        try {
+          const retryModel = this.genAI.getGenerativeModel({
+            model: process.env.GOOGLE_GENAI_MODEL || 'gemini-2.0-flash-001',
+            generationConfig: {
+              ...(generationConfig || {}),
+              temperature: retryTemp,
+            },
+          });
+          const retryPrompt = `${prompt}\nSTRICT: Return ONLY a valid JSON array of objects. No commentary.`;
+          const timeoutMs = CONFIG.AI_TABLE_TIMEOUT_MS;
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error('AI table generation timeout (retry)')),
+              timeoutMs
+            )
+          );
+          const retryResult = await Promise.race([
+            retryModel.generateContent(retryPrompt),
+            timeoutPromise,
+          ]);
+          const retryRaw = retryResult.response.text();
+          const rawCleanRetry = cleanGeminiJSON(retryRaw, 'array');
+          const retryCleanText =
+            typeof rawCleanRetry === 'string'
+              ? rawCleanRetry
+              : JSON.stringify(rawCleanRetry);
+          try {
+            if (
+              retryCleanText.startsWith('[') &&
+              retryCleanText.endsWith(']')
+            ) {
+              tableData = JSON.parse(retryCleanText);
+            } else {
+              const parsed = JSON.parse(retryCleanText);
+              tableData = parsed[tableName] || Object.values(parsed)[0] || [];
+            }
+            if (structuredJSON) {
+              const v2 = validateArrayRecords(tableName, tableData);
+              retryParseAdjustments = v2.adjustments;
+              tableData = v2.rows;
+            }
+          } catch (retryParseErr) {
+            const msg = `Retry parse error ${tableName}: ${retryParseErr.message}`;
+            aiErrors.push(msg);
+            retryErrors.push(msg);
+            tableData = [];
+          }
+        } catch (retryErr) {
+          const msg = `Retry AI generation error ${tableName}: ${retryErr.message}`;
+          aiErrors.push(msg);
+          retryErrors.push(msg);
+        }
+        retrySucceeded = Array.isArray(tableData) && tableData.length > 0;
+        if (!retrySucceeded) {
+          console.log('[gen:table:retry_failed]', tableName);
+        } else {
+          console.log(
+            '[gen:table:retry_success]',
+            tableName,
+            'rows=',
+            tableData.length
+          );
+        }
+        retriesMeta[tableName] = {
+          attempted: true,
+          reason: retryReason,
+          success: retrySucceeded,
+          firstRows: firstAttemptRows,
+          finalRows: Array.isArray(tableData) ? tableData.length : 0,
+          temperatureFirst: effectiveTemp,
+          temperatureRetry: retrySucceeded
+            ? effectiveTemp !== undefined
+              ? Math.max(0.1, Number((effectiveTemp * 0.7).toFixed(2)))
+              : 0.3
+            : undefined,
+          errorsFirst: firstErrors,
+          errorsRetry: retryErrors,
+          parseAdjustmentsFirst: parseAdjustments || null,
+          parseAdjustmentsRetry: retryParseAdjustments || null,
+        };
+      } else {
+        // No retry needed
+        retriesMeta[tableName] = {
+          attempted: false,
+          success: true,
+          firstRows: firstAttemptRows,
+          finalRows: firstAttemptRows,
+          temperatureFirst: effectiveTemp,
+          errorsFirst: firstErrors,
+          parseAdjustmentsFirst: parseAdjustments || null,
+        };
       }
 
       // If AI failed or returned empty -> deterministic fallback per table
@@ -302,6 +467,16 @@ class DataGenerator {
             return r;
           });
         }
+        // Update retry meta final rows if fallback used
+        if (retriesMeta[tableName]) {
+          retriesMeta[tableName].finalRows = tableData.length;
+          if (
+            retriesMeta[tableName].attempted &&
+            !retriesMeta[tableName].success
+          ) {
+            retriesMeta[tableName].usedDeterministicFallback = true;
+          }
+        }
       }
       console.log('[gen:table:complete]', tableName, 'rows=', tableData.length);
 
@@ -329,8 +504,23 @@ class DataGenerator {
     }
 
     applyEnumSampling(schema, generatedData); // fill enum placeholders
-    const meta = { maxTokensApplied, strictAIMode: !!strictAIMode };
-    autoRepairForeignKeys(schema, generatedData, meta, { enabled: true });
+    const meta = {
+      maxTokensApplied,
+      strictAIMode: !!strictAIMode,
+      retries: retriesMeta,
+      structuredJSON: !!structuredJSON,
+    };
+    if (config?.integrityRepair) {
+      try {
+        autoRepairForeignKeys(schema, generatedData, meta, { enabled: true });
+        meta.integrityRepairApplied = true;
+      } catch (e) {
+        meta.integrityRepairApplied = false;
+        meta.integrityRepairError = e instanceof Error ? e.message : String(e);
+      }
+    } else {
+      meta.integrityRepairApplied = false;
+    }
     const validation = validateDeterministicData(schema, generatedData, {
       debug,
     });

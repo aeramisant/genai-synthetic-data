@@ -496,12 +496,13 @@ app.get('/api/jobs/:id', (req, res) => {
   const job = getJob(req.params.id);
   if (!job) return res.status(404).json({ error: 'Job not found' });
   // Do not leak full result data if large; return summary
-  const { id, kind, status, progress, error, createdAt, result } = job;
+  const { id, kind, status, progress, phase, error, createdAt, result } = job;
   res.json({
     id,
     kind,
     status,
     progress,
+    phase,
     error,
     createdAt,
     // Provide minimal result metadata if completed

@@ -17,6 +17,7 @@ function createJob(kind) {
     id: jobId,
     kind,
     status: 'created',
+    phase: 'created',
     progress: 0,
     error: null,
     result: null,
@@ -49,9 +50,11 @@ export class GenerationService {
   ) {
     const controller = abortControllers.get(job.id);
     try {
+      job.phase = 'parsing';
       const schema = await this.parseDDL(ddl);
       job.progress = 0.1;
       const withMeta = true;
+      job.phase = 'generating';
       const generationResult = await this.generator.generateSyntheticData(
         schema,
         instructions,
@@ -79,11 +82,19 @@ export class GenerationService {
       // Always operate in strict raw AI mode now: do not mutate / normalize / repair.
       meta.strictAIMode = true;
       meta.rawAI = true;
+      if (instructions) {
+        // Persist the original instructions/prompt for auditing.
+        // Trim just in case upstream allowed slight overflow; server route enforces 5k.
+        meta.instructions = String(instructions).slice(0, 5000);
+        meta.instructionsLength = meta.instructions.length;
+      }
+      job.phase = 'validating';
       const validation = validateDeterministicData(schema, data, {
         debug: config?.debug,
       });
       meta = { ...meta, validation: validation.report };
       job.progress = 0.9;
+      job.phase = 'saving';
       let datasetId = null;
       if (saveName) {
         datasetId = await this.datasetManager.saveDataset(
@@ -95,6 +106,7 @@ export class GenerationService {
         );
       }
       job.status = 'completed';
+      job.phase = 'completed';
       job.progress = 1;
       try {
         console.log('[job:complete]', job.id, {
