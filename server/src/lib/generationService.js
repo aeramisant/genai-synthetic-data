@@ -272,6 +272,36 @@ export class GenerationService {
     return { zipPath };
   }
 
+  async deleteDataset(datasetId) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const exists = await client.query(
+        'SELECT 1 FROM generated_datasets WHERE id = $1',
+        [datasetId]
+      );
+      if (!exists.rows.length) {
+        await client.query('ROLLBACK');
+        throw new Error('Dataset not found');
+      }
+      await client.query('DELETE FROM generated_data WHERE dataset_id = $1', [
+        datasetId,
+      ]);
+      await client.query('DELETE FROM generated_datasets WHERE id = $1', [
+        datasetId,
+      ]);
+      await client.query('COMMIT');
+      return { deleted: true, id: datasetId };
+    } catch (e) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (_) {}
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
   async modifyDataset(datasetId, { prompt, tableName }) {
     // Load original dataset fully
     const original = await this.getDataset(datasetId, { includeData: true });

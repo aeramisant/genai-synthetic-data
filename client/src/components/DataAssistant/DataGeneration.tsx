@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useId } from 'react';
 import PromptInput from '../Form/PromptInput';
 import SchemaUpload from '../Form/SchemaUpload';
 import TemperatureSlider from '../Form/TemperatureSlider';
@@ -6,10 +6,16 @@ import MaxTokensInput from '../Form/MaxTokensInput';
 import DataPreview from '../DataPreview/DataPreview';
 import './DataGeneration.css';
 
-function DataGeneration() {
+interface DataGenerationProps {
+  selectedDatasetId?: number | null;
+}
+
+function DataGeneration({ selectedDatasetId }: DataGenerationProps) {
   const [ddlSchema, setDdlSchema] = useState('');
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(500);
+  const [targetRows, setTargetRows] = useState<number>(10);
+  const targetRowsId = useId();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
@@ -31,7 +37,7 @@ function DataGeneration() {
           temperature,
           maxTokens,
           withMeta: true,
-          numRecords: 10,
+          numRecords: targetRows,
         },
       };
       const autoName = `run_${Date.now()}`;
@@ -77,6 +83,24 @@ function DataGeneration() {
           <h3>Advanced Parameters</h3>
           <TemperatureSlider value={temperature} onChange={setTemperature} />
           <MaxTokensInput value={maxTokens} onChange={setMaxTokens} />
+          <div className="target-rows" style={{ marginTop: '8px' }}>
+            <label
+              style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600 }}
+              htmlFor={targetRowsId}>
+              Target Rows (advisory)
+            </label>
+            <input
+              id={targetRowsId}
+              type="number"
+              min={1}
+              max={1000}
+              value={targetRows}
+              onChange={(e) =>
+                setTargetRows(parseInt(e.target.value || '0', 10) || 1)
+              }
+              style={{ width: '120px' }}
+            />
+          </div>
         </div>
         <button
           type="button"
@@ -87,7 +111,10 @@ function DataGeneration() {
         </button>
         {error && <div className="generation-error">{error}</div>}
       </div>
-      <DataPreview jobId={currentJobId} />
+      <DataPreview
+        jobId={currentJobId}
+        datasetIdExternal={selectedDatasetId || undefined}
+      />
     </div>
   );
 }

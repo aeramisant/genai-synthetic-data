@@ -1,0 +1,75 @@
+.dataset-list {
+  font-size: 0.85rem;
+  border-right: 1px solid #e2e2e2;
+  padding: 8px;
+  max-height: 100%;
+  overflow-y: auto;
+}
+.dataset-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.dataset-list-header h3 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+.dataset-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.dataset-list li {
+  margin: 0 0 4px;
+}
+.dataset-list li.active .dataset-item-btn {
+  background: #1e63c3;
+  color: #fff;
+}
+.dataset-item-btn {
+  width: 100%;
+  text-align: left;
+  background: #f8f8f8;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 4px 6px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dataset-item-btn:hover {
+  background: #eef5ff;
+}
+.dataset-item-btn .name {
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+.dataset-item-btn .meta {
+  display: flex;
+  gap: 6px;
+  font-size: 0.65rem;
+  color: #555;
+}
+.refresh-btn {
+  background: transparent;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  width: 26px;
+  height: 26px;
+  line-height: 1;
+}
+.refresh-btn:hover {
+  background: #f0f0f0;
+}
+.error {
+  color: #c0392b;
+  font-size: 0.7rem;
+  margin: 4px 0;
+}
+.placeholder {
+  font-size: 0.7rem;
+  color: #777;
+}

@@ -34,9 +34,10 @@ interface DatasetPayload {
 
 interface DataPreviewProps {
   jobId?: string | null;
+  datasetIdExternal?: number;
 }
 
-function DataPreview({ jobId }: DataPreviewProps) {
+function DataPreview({ jobId, datasetIdExternal }: DataPreviewProps) {
   const [status, setStatus] = useState<string>('idle');
   const [progress, setProgress] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
@@ -105,7 +106,16 @@ function DataPreview({ jobId }: DataPreviewProps) {
     pollRef.current = window.setInterval(poll, 1200);
   }, [jobId]);
 
-  // Fetch dataset when we have a datasetId
+  // External dataset selection override
+  useEffect(() => {
+    if (datasetIdExternal && datasetIdExternal !== datasetId) {
+      setDatasetId(datasetIdExternal);
+      setDataset(null);
+      setSelectedTable('');
+    }
+  }, [datasetIdExternal, datasetId]);
+
+  // Fetch dataset when we have a datasetId (internal or external)
   useEffect(() => {
     if (!datasetId) return;
     const fetchDataset = async () => {
@@ -148,6 +158,27 @@ function DataPreview({ jobId }: DataPreviewProps) {
     >) || {};
   const maxTokensApplied =
     (dataset?.meta?.maxTokensApplied as number) || undefined;
+
+  const handleDownload = async () => {
+    if (!datasetId) return;
+    try {
+      const res = await fetch(
+        `http://localhost:4000/api/datasets/${datasetId}/export`
+      );
+      if (!res.ok) throw new Error('Export failed');
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `dataset_${datasetId}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Download failed');
+    }
+  };
 
   return (
     <div className="data-preview">
@@ -210,6 +241,15 @@ function DataPreview({ jobId }: DataPreviewProps) {
             </label>
           </div>
         )}
+        {datasetId && (
+          <button
+            type="button"
+            onClick={handleDownload}
+            style={{ padding: '4px 10px' }}
+            title="Download dataset as ZIP of CSV files">
+            Download
+          </button>
+        )}
         {/* Debug buttons removed; consolidated in RawMetaViewer cycle button */}
       </div>
       <div className="table-container">
@@ -239,7 +279,37 @@ function DataPreview({ jobId }: DataPreviewProps) {
           }
         />
       )}
-      <QuickEdit />
+      <QuickEdit
+        datasetId={datasetId}
+        tables={tables}
+        activeTable={selectedTable}
+        onModified={() => {
+          // refetch dataset after modification
+          if (datasetId) {
+            (async () => {
+              try {
+                const res = await fetch(
+                  `http://localhost:4000/api/datasets/${datasetId}?includeData=true`
+                );
+                if (!res.ok) throw new Error('Failed to reload dataset');
+                const payload = await res.json();
+                const normalized: DatasetPayload = {
+                  metadata: payload.metadata || { id: datasetId },
+                  rowCounts: payload.rowCounts || payload.meta?.rowCounts || {},
+                  data:
+                    payload.data || payload.meta?.data || payload.meta?.data,
+                  meta: payload.meta,
+                };
+                setDataset(normalized);
+              } catch (e) {
+                setError(
+                  e instanceof Error ? e.message : 'Failed to reload dataset'
+                );
+              }
+            })();
+          }
+        }}
+      />
     </div>
   );
 }

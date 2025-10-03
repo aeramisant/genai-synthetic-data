@@ -2,9 +2,13 @@ import { useState } from 'react';
 import './App.css';
 import DataGeneration from './components/DataAssistant/DataGeneration';
 import TalkToData from './components/DataAssistant/TalkToData';
+import DatasetList from './components/DatasetList/DatasetList';
 
 function App() {
   const [activeTab, setActiveTab] = useState('dataGeneration');
+  const [selectedDatasetId, setSelectedDatasetId] = useState<number | null>(
+    null
+  );
 
   return (
     <div className="app">
@@ -13,6 +17,12 @@ function App() {
       </nav>
       <div className="container">
         <aside className="sidebar">
+          <DatasetList
+            onSelect={(id) => {
+              setSelectedDatasetId(id);
+            }}
+            activeId={selectedDatasetId || undefined}
+          />
           <button
             type="button"
             className={`sidebar-button ${
@@ -31,7 +41,9 @@ function App() {
           </button>
         </aside>
         <main className="content">
-          {activeTab === 'dataGeneration' && <DataGeneration />}
+          {activeTab === 'dataGeneration' && (
+            <DataGeneration selectedDatasetId={selectedDatasetId} />
+          )}
           {activeTab === 'talkToData' && <TalkToData />}
         </main>
       </div>

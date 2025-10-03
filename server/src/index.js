@@ -588,6 +588,18 @@ app.get('/api/datasets/:id/export', async (req, res, next) => {
   }
 });
 
+app.delete('/api/datasets/:id(\\d+)', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const r = await generationService.deleteDataset(id);
+    res.json(r);
+  } catch (e) {
+    if (/not found/i.test(e.message))
+      return res.status(404).json({ error: e.message });
+    next(e);
+  }
+});
+
 app.post('/api/datasets/:id/modify', heavyLimiter, async (req, res, next) => {
   try {
     const id = Number(req.params.id);
