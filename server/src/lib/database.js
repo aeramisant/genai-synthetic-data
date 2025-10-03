@@ -64,6 +64,53 @@ async function setupDatabase() {
       }
     }
     console.log('Database setup completed');
+
+    // --- Resilience: Re-create core tables if manually dropped after migrations were recorded ---
+    const coreTables = ['generated_datasets', 'generated_data'];
+    const missing = [];
+    for (const t of coreTables) {
+      const res = await pool.query(
+        `SELECT COUNT(*)::int AS c FROM information_schema.tables WHERE table_schema='public' AND table_name=$1`,
+        [t]
+      );
+      if (res.rows[0].c === 0) missing.push(t);
+    }
+    if (missing.length) {
+      console.warn(
+        '[db] Detected missing core tables:',
+        missing.join(', '),
+        '— attempting recovery.'
+      );
+      // Re-run 0001_initial.sql regardless of recorded state
+      const initialPath = path.join(migrationsDir, '0001_initial.sql');
+      if (fs.existsSync(initialPath)) {
+        try {
+          const initialSQL = fs.readFileSync(initialPath, 'utf-8');
+          await pool.query(initialSQL);
+          console.log(
+            '[db] Re-applied 0001_initial.sql to restore core tables.'
+          );
+        } catch (e) {
+          console.error('[db] Failed to re-apply 0001_initial.sql:', e.message);
+        }
+      } else {
+        console.error(
+          '[db] Cannot recover missing tables; migration file 0001_initial.sql not found.'
+        );
+      }
+      // Ensure updated_at column present (0002)
+      try {
+        await pool.query(
+          'ALTER TABLE generated_datasets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP'
+        );
+        await pool.query(
+          'UPDATE generated_datasets SET updated_at = COALESCE(updated_at, created_at) WHERE updated_at IS NULL'
+        );
+      } catch (e) {
+        console.warn('[db] Failed ensuring updated_at column:', e.message);
+      }
+    }
+    // --- End resilience block ---
   } catch (error) {
     console.error('Error setting up database:', error);
     console.error('Make sure PostgreSQL is running and the database exists');

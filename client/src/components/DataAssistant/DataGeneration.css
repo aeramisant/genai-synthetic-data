@@ -47,3 +47,7 @@
 .generate-button:hover {
   background-color: #1e7e34;
 }
+
+.schema-preview {
+  color: #555;
+}

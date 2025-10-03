@@ -36,16 +36,32 @@ async function testLibrarySystem() {
       temperature: 0.8,
       numRecords: 5, // This will be overridden by specific counts in instructions
     });
-
-    // Save the generated data to a file
-    await fs.writeFile(
-      path.join(__dirname, '../output/generated_library_data.json'),
-      JSON.stringify(data, null, 2)
-    );
-
-    console.log(
-      '\nData generation complete! Results saved to output/generated_library_data.json'
-    );
+    // Optional: persist to DB instead of writing a JSON snapshot (set SAVE_DATASET=true)
+    if (process.env.SAVE_DATASET === 'true') {
+      try {
+        const { default: DatasetManager } = await import(
+          '../../src/lib/datasetManager.js'
+        );
+        const dm = new DatasetManager();
+        // Basic schema wrapper expected by saveDataset: we already have schema object
+        const datasetId = await dm.saveDataset(
+          process.env.DATASET_NAME || 'Library_Test_Dataset',
+          'Test library synthetic dataset',
+          schema,
+          data,
+          { testScript: true }
+        );
+        console.log(
+          `\nData generation complete! Persisted as dataset ID ${datasetId}`
+        );
+      } catch (persistErr) {
+        console.warn('Skipping DB persistence (error):', persistErr.message);
+      }
+    } else {
+      console.log(
+        '\nData generation complete (not persisted, SAVE_DATASET!=true).'
+      );
+    }
 
     // Display a sample of the generated data
     console.log('\nSample of generated data:');
@@ -66,7 +82,5 @@ async function testLibrarySystem() {
   }
 }
 
-// Create output directory if it doesn't exist
-fs.mkdir(path.join(__dirname, '../output'), { recursive: true })
-  .then(() => testLibrarySystem())
-  .catch(console.error);
+// Run the test directly
+testLibrarySystem().catch(console.error);

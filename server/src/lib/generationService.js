@@ -78,6 +78,97 @@ export class GenerationService {
           data = normalizeDataset(schema, data);
           meta.normalized = true;
         }
+
+      // --- Auto-repair phase (optional) -------------------------------------------------
+      // Many FK violations arise because AI output either:
+      // 1) Omits numeric surrogate PKs (e.g. author_id) or fills with textual descriptions.
+      // 2) References parent IDs (1..N) that were never assigned to parent rows.
+      // We heuristically repair single-column primary keys & their dependent foreign keys
+      // BEFORE validation so final report reflects improved integrity.
+      // This is conservative: only rewrites when PK column values look clearly invalid.
+      try {
+        if (config?.autoFixForeignKeys !== false) {
+          const pkRewriteCounts = {};
+          const fkRewriteCounts = {};
+
+          // Pass 1: ensure single-column PK tables have sequential numeric IDs if missing/invalid
+          for (const [tableName, def] of Object.entries(schema.tables || {})) {
+            if (!Array.isArray(def.primaryKey) || def.primaryKey.length !== 1) continue;
+            const pkCol = def.primaryKey[0];
+            const rows = data[tableName] || [];
+            if (!rows.length) continue;
+            let needsRewrite = false;
+            const seen = new Set();
+            let numericCount = 0;
+            for (const r of rows) {
+              const v = r[pkCol];
+              if (v === null || v === undefined || (typeof v === 'string' && v.length > 40)) {
+                needsRewrite = true; break;
+              }
+              if (typeof v === 'number') numericCount++;
+              const key = JSON.stringify(v);
+              if (seen.has(key)) { needsRewrite = true; break; }
+              seen.add(key);
+            }
+            if (!needsRewrite && numericCount === 0) {
+              // All non-numeric -> likely textual placeholders
+              needsRewrite = true;
+            }
+            if (needsRewrite) {
+              let i = 1;
+              for (const r of rows) { r[pkCol] = i++; }
+              pkRewriteCounts[tableName] = rows.length;
+            }
+          }
+
+            // Build quick lookup for parent PK sets after potential rewrite
+          const parentPkSets = {};
+          for (const [tableName, def] of Object.entries(schema.tables || {})) {
+            if (!Array.isArray(def.primaryKey) || def.primaryKey.length !== 1) continue;
+            const pkCol = def.primaryKey[0];
+            const rows = data[tableName] || [];
+            parentPkSets[tableName] = new Set(rows.map(r => r[pkCol]).filter(v => v!==null && v!==undefined));
+          }
+
+          // Pass 2: repair FK columns referencing a single-column PK parent
+          for (const [tableName, def] of Object.entries(schema.tables || {})) {
+            const rows = data[tableName] || [];
+            if (!rows.length) continue;
+            for (const fk of def.foreignKeys || []) {
+              if (!fk.columns || !fk.referenceTable || !fk.referenceColumns) continue;
+              if (fk.columns.length !== 1 || fk.referenceColumns.length !== 1) continue; // only simple FKs for now
+              const childCol = fk.columns[0];
+              const parentTable = fk.referenceTable;
+              const parentCol = fk.referenceColumns[0];
+              const parentSet = parentPkSets[parentTable];
+              if (!parentSet) continue;
+              const parentValues = Array.from(parentSet);
+              if (!parentValues.length) continue;
+              let rewrites = 0;
+              let rrIdx = 0;
+              for (const r of rows) {
+                const val = r[childCol];
+                if (val === null || val === undefined || !parentSet.has(val)) {
+                  // Assign round-robin from existing parent PKs
+                  r[childCol] = parentValues[rrIdx % parentValues.length];
+                  rrIdx++;
+                  rewrites++;
+                }
+              }
+              if (rewrites) {
+                fkRewriteCounts[`${tableName}.${childCol}`] = rewrites;
+              }
+            }
+          }
+
+          if (Object.keys(pkRewriteCounts).length || Object.keys(fkRewriteCounts).length) {
+            meta.autoFixForeignKeys = { pkRewrites: pkRewriteCounts, fkRewrites: fkRewriteCounts };
+          }
+        }
+      } catch (autoFixErr) {
+        meta.autoFixForeignKeysError = autoFixErr.message;
+      }
+      // --- End auto-repair --------------------------------------------------------------
       } catch (normErr) {
         // Record (non-fatal) normalization issue for visibility
         meta.normalizationError = normErr.message;
@@ -99,6 +190,23 @@ export class GenerationService {
       }
       job.status = 'completed';
       job.progress = 1;
+      try {
+        console.log('[job:complete]', job.id, {
+          datasetId,
+          tables: Object.keys(data || {}).length,
+          rowCounts: Object.fromEntries(
+            Object.entries(data || {}).map(([t, rows]) => [t, rows.length])
+          ),
+          validationSummary: validation.report?.summary || {
+            pkDuplicates: validation.report?.pkDuplicates,
+            fkViolations: validation.report?.fkViolations,
+            notNullViolations: validation.report?.notNullViolations,
+          },
+          metaKeys: Object.keys(meta || {}),
+        });
+      } catch (_) {
+        /* ignore logging issues */
+      }
       job.result = {
         jobId: job.id,
         datasetId,

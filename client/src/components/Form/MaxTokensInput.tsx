@@ -2,12 +2,24 @@ import './MaxTokensInput.css';
 
 import { useId } from 'react';
 
-function MaxTokensInput() {
-  const inputId = useId();
+interface MaxTokensInputProps {
+  value: number;
+  onChange: (value: number) => void;
+}
+
+function MaxTokensInput({ value, onChange }: MaxTokensInputProps) {
+  const tokensId = useId();
   return (
     <div className="max-tokens-input">
-      <label htmlFor={inputId}>Max Tokens:</label>
-      <input type="number" id={inputId} defaultValue="100" />
+      <label htmlFor={tokensId}>Max Tokens</label>
+      <input
+        type="number"
+        id={tokensId}
+        value={value}
+        onChange={(e) => onChange(parseInt(e.target.value, 10) || 0)}
+        min="1"
+        max="32768"
+      />
     </div>
   );
 }

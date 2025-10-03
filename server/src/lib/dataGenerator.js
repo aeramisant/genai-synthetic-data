@@ -85,6 +85,144 @@ class DataGenerator {
     };
   }
 
+  /**
+   * Pre-sanitize DDL to increase compatibility with node-sql-parser (PostgreSQL dialect)
+   * - Convert AUTO_INCREMENT -> SERIAL
+   * - Convert ENUM(...) -> TEXT
+   * - Convert DATETIME -> TIMESTAMP
+   * - Strip inline CHECK constraints (retain column definition)
+   * - Remove trailing commas before )
+   * - Remove duplicated semicolons
+   */
+  _sanitizeDDL(raw) {
+    let ddl = raw.replace(/\r\n/g, '\n');
+    // Remove BOM
+    ddl = ddl.replace(/^\uFEFF/, '');
+    // Remove block comments
+    ddl = ddl.replace(/\/\*[\s\S]*?\*\//g, '');
+    // Remove inline comments entirely (they often break parser mid-line)
+    ddl = ddl.replace(/--[^\n]*$/gm, '');
+    // AUTO_INCREMENT patterns
+    ddl = ddl.replace(
+      /\bINT\s+PRIMARY\s+KEY\s+AUTO_INCREMENT\b/gi,
+      'SERIAL PRIMARY KEY'
+    );
+    ddl = ddl.replace(
+      /\bINT\s+AUTO_INCREMENT\s+PRIMARY\s+KEY\b/gi,
+      'SERIAL PRIMARY KEY'
+    );
+    ddl = ddl.replace(
+      /\bINTEGER\s+PRIMARY\s+KEY\s+AUTO_INCREMENT\b/gi,
+      'SERIAL PRIMARY KEY'
+    );
+    ddl = ddl.replace(/\bAUTO_INCREMENT\b/gi, ''); // fallback removal
+    // ENUM -> TEXT (simplify)
+    ddl = ddl.replace(/ENUM\s*\([^)]*\)/gi, 'TEXT');
+    // DATETIME -> TIMESTAMP (Postgres friendly)
+    ddl = ddl.replace(/\bDATETIME\b/gi, 'TIMESTAMP');
+    // Inline CHECK constraints inside column definitions: col INT CHECK (...)
+    ddl = ddl.replace(/CHECK\s*\(([^)(]*|\([^)(]*\))*\)/gi, '');
+
+    // Remove multiple spaces (but keep newlines first to split statements reliably)
+    ddl = ddl
+      .replace(/\n+/g, '\n')
+      .split('\n')
+      .map((l) => l.replace(/\s+/g, ' ').trimEnd())
+      .join('\n');
+    // Normalize statement terminators to semicolon + newline
+    ddl = ddl.replace(/;\s*/g, ';\n');
+    // Ensure commas before ) are clean
+    ddl = ddl.replace(/,\s*\)/g, ')');
+    return ddl;
+  }
+
+  _normalizeAISchema(parsed) {
+    // If already shape { tables: { ... } } return as is
+    if (parsed && typeof parsed === 'object' && parsed.tables) return parsed;
+    const tables = {};
+    if (Array.isArray(parsed)) {
+      for (const entry of parsed) {
+        const name = entry?.name || entry?.tableName || entry?.table || null;
+        if (!name) continue;
+        tables[name] = this._coerceTableShape(entry);
+      }
+      return { tables };
+    }
+    // Object with keys as table names or numeric indices
+    for (const [k, v] of Object.entries(parsed || {})) {
+      if (v && typeof v === 'object' && (v.columns || v.cols || v.schema)) {
+        const name = v.name || v.tableName || k;
+        tables[name] = this._coerceTableShape(v);
+      } else if (
+        Array.isArray(v) &&
+        v.length &&
+        typeof v[0] === 'object' &&
+        !tables[k]
+      ) {
+        // Looks like data rows without schema; build columns from first row
+        const sample = v[0];
+        const cols = Object.fromEntries(
+          Object.keys(sample).map((c) => [c, { type: 'text', nullable: true }])
+        );
+        tables[k] = { name: k, columns: cols, primaryKey: [], foreignKeys: [] };
+      }
+    }
+    return { tables };
+  }
+
+  _coerceTableShape(entry) {
+    const colsRaw = entry.columns || entry.cols || entry.schema || {};
+    const columns = {};
+    if (Array.isArray(colsRaw)) {
+      for (const c of colsRaw) {
+        if (!c) continue;
+        const name = c.name || c.column || c.col || c[0];
+        if (!name) continue;
+        columns[name] = {
+          type: (c.type || 'text').toString().toLowerCase(),
+          nullable: c.nullable !== false,
+        };
+      }
+    } else if (typeof colsRaw === 'object') {
+      for (const [ck, cv] of Object.entries(colsRaw)) {
+        if (cv && typeof cv === 'object') {
+          columns[ck] = {
+            type: (cv.type || 'text').toString().toLowerCase(),
+            nullable: cv.nullable !== false,
+          };
+        } else {
+          columns[ck] = { type: 'text', nullable: true };
+        }
+      }
+    }
+    const pk = Array.isArray(entry.primaryKey)
+      ? entry.primaryKey
+      : entry.primary_key || [];
+    const fks = Array.isArray(entry.foreignKeys)
+      ? entry.foreignKeys
+      : Array.isArray(entry.foreign_keys)
+      ? entry.foreign_keys
+      : [];
+    return {
+      name: entry.name || entry.tableName || entry.table || 'unknown',
+      columns,
+      primaryKey: pk,
+      foreignKeys: fks
+        .map((f) => ({
+          columns: f?.columns || f?.cols || [],
+          referenceTable:
+            f?.referenceTable ||
+            f?.refTable ||
+            f?.table ||
+            f?.references ||
+            f?.on ||
+            undefined,
+          referenceColumns:
+            f?.referenceColumns || f?.refColumns || f?.refs || f?.columns || [],
+        }))
+        .filter((f) => (f.columns?.length || 0) > 0 && !!f.referenceTable),
+    };
+  }
   // Very lightweight fallback parser for simple CREATE TABLE statements (MySQL-ish syntax)
   _naiveParseDDL(ddl) {
     const schema = { tables: {}, relationships: [] };
@@ -248,60 +386,269 @@ class DataGenerator {
   }
 
   async parseDDL(ddlContent) {
-    try {
-      // First try to parse the DDL using the SQL parser
-      const ast = this.parser.parse(ddlContent, this.options);
+    const warnings = [];
+    const original = ddlContent;
+    const sanitized = this._sanitizeDDL(ddlContent);
 
-      // Transform the AST into a structured schema
-      const schema = this._processAST(ast);
-
-      // If parser produced no tables, attempt naive fallback regardless of AI flag
-      if (!schema.tables || Object.keys(schema.tables).length === 0) {
-        const naive = this._naiveParseDDL(ddlContent);
-        if (naive.tables && Object.keys(naive.tables).length > 0) {
-          return naive;
-        }
-      }
-
-      // If AI usage disabled, skip enhancement to avoid network calls
-      if (process.env.USE_AI === 'false') {
-        if (!schema.tables || Object.keys(schema.tables).length === 0) {
-          // Fallback naive parse for MySQL style (AUTO_INCREMENT / ENUM) DDL
-          const naive = this._naiveParseDDL(ddlContent);
-          return naive;
-        }
-        return schema;
-      }
-
-      // Use Gemini to enhance the schema with additional insights (best-effort)
-      try {
-        return await this._enhanceSchemaWithAI(schema, ddlContent);
-      } catch (enhErr) {
-        console.warn('AI schema enhancement skipped (error):', enhErr.message);
-        return schema; // fallback to raw parsed schema
-      }
-    } catch (error) {
-      console.error('Error parsing DDL:', error);
-
-      // Fallback to using Gemini directly if SQL parsing fails
-      const prompt = `
-        Parse this DDL and return a JSON structure with:
-        1. Table definitions
-        2. Column types and constraints
-        3. Relationships between tables
-        
-        DDL:
-        ${ddlContent}
-
-        IMPORTANT: Return only the JSON data without any markdown formatting or code blocks.
-      `;
-
-      const result = await this.model.generateContent(prompt);
-      const text = result.response.text();
-      // Remove any markdown code blocks if present
-      const jsonStr = text.replace(/```json\n|\n```/g, '').trim();
-      return JSON.parse(jsonStr);
+    // Split CREATE TABLE blocks manually to allow partial recovery
+    const blockRegex = /CREATE\s+TABLE\s+[A-Za-z0-9_"`]+\s*\([^;]+?\);/gi;
+    const blocks = sanitized.match(blockRegex) || [];
+    if (!blocks.length) {
+      warnings.push({
+        type: 'no-blocks',
+        message: 'No CREATE TABLE blocks detected after sanitization',
+      });
     }
+    const recovered = { tables: {} };
+    for (const rawBlock of blocks) {
+      const tableNameMatch = rawBlock.match(
+        /CREATE\s+TABLE\s+[`"']?([A-Za-z0-9_]+)[`"']?/i
+      );
+      const tableName = tableNameMatch ? tableNameMatch[1] : null;
+      if (!tableName) {
+        warnings.push({
+          type: 'missing-name',
+          message: 'Could not extract table name for a block',
+        });
+        continue;
+      }
+      let parsedOk = false;
+      // Capture ENUM values and inline column-level CHECK constraints before modifications
+      const enumValuesPerColumn = {}; // col -> [values]
+      const inlineChecks = {}; // col -> expression
+      const enumRegex = /[`"']?([A-Za-z0-9_]+)[`"']?\s+ENUM\s*\(([^)]+)\)/i;
+      const checkInlineRegex =
+        /[`"']?([A-Za-z0-9_]+)[`"']?\s+[^,]*?CHECK\s*\(([^)]+)\)/i;
+      const rawLines = rawBlock.split(/\n/);
+      for (const ln of rawLines) {
+        const enumMatch = ln.match(enumRegex);
+        if (enumMatch) {
+          const col = enumMatch[1];
+          // split enum list respecting quotes
+          const listRaw = enumMatch[2];
+          const vals = listRaw
+            .split(/,(?=(?:[^']*'[^']*')*[^']*$)/) // split on commas not inside single quotes pairs
+            .map((v) => v.trim().replace(/^'|'$/g, ''))
+            .filter(Boolean);
+          if (vals.length) enumValuesPerColumn[col] = vals;
+        }
+        const chk = ln.match(checkInlineRegex);
+        if (chk) {
+          const col = chk[1];
+          const expr = chk[2].trim();
+          inlineChecks[col] = expr;
+        }
+      }
+      // Progressive simplifications for this block
+      const simplifications = [
+        { label: 'original-block', ddl: rawBlock },
+        {
+          label: 'strip-check',
+          ddl: rawBlock.replace(/CHECK\s*\([^)]*\)/gi, ''),
+        },
+        {
+          label: 'strip-enum',
+          ddl: rawBlock.replace(/ENUM\s*\([^)]*\)/gi, 'VARCHAR(100)'),
+        },
+        { label: 'strip-comments', ddl: rawBlock.replace(/--[^\n]*$/gm, '') },
+      ];
+      for (const attempt of simplifications) {
+        try {
+          // Try both PostgreSQL and MySQL dialects for this attempt
+          let schemaPiece = null;
+          const dialects = ['PostgreSQL', 'MySQL'];
+          for (const db of dialects) {
+            try {
+              const parser = new Parser();
+              const ast = parser.parse(attempt.ddl, {
+                database: db,
+                multipleStatements: true,
+                includeEnums: true,
+              });
+              schemaPiece = this._processAST(ast);
+              if (schemaPiece?.tables?.[tableName]) {
+                if (db !== this.options.database) {
+                  warnings.push({
+                    type: 'dialect-detection',
+                    message: `Parsed table ${tableName} using ${db} dialect`,
+                  });
+                }
+                break;
+              }
+            } catch (_) {
+              // try next dialect
+            }
+          }
+          if (!schemaPiece)
+            throw new Error('All dialect parse attempts failed for block');
+          if (schemaPiece.tables?.[tableName]) {
+            recovered.tables[tableName] = schemaPiece.tables[tableName];
+            // Attach enums & inline checks metadata if captured
+            if (Object.keys(enumValuesPerColumn).length) {
+              for (const [col, vals] of Object.entries(enumValuesPerColumn)) {
+                if (recovered.tables[tableName].columns[col]) {
+                  recovered.tables[tableName].columns[col].enumValues = vals;
+                  // Coerce type to text if it was enum-like
+                  if (
+                    /enum/i.test(recovered.tables[tableName].columns[col].type)
+                  ) {
+                    recovered.tables[tableName].columns[col].type = 'text';
+                  }
+                }
+              }
+            }
+            if (Object.keys(inlineChecks).length) {
+              recovered.tables[tableName].checks =
+                recovered.tables[tableName].checks || [];
+              for (const [col, expr] of Object.entries(inlineChecks)) {
+                recovered.tables[tableName].checks.push({
+                  column: col,
+                  expression: expr,
+                  level: 'column',
+                });
+              }
+            }
+            if (attempt.label !== 'original-block') {
+              warnings.push({
+                type: 'block-simplified',
+                message: `Table ${tableName} parsed after ${attempt.label}`,
+              });
+            }
+            parsedOk = true;
+            break;
+          }
+        } catch (_) {
+          // continue trying silently
+        }
+      }
+      if (!parsedOk) {
+        // Regex salvage for columns
+        const body = rawBlock.substring(
+          rawBlock.indexOf('(') + 1,
+          rawBlock.lastIndexOf(')')
+        );
+        const colLines = body
+          .split(/,(?![^()]*\))/)
+          .map((l) => l.trim())
+          .filter(
+            (l) =>
+              l &&
+              !/^FOREIGN\s+KEY/i.test(l) &&
+              !/^PRIMARY\s+KEY/i.test(l) &&
+              !/^UNIQUE/i.test(l) &&
+              !/^CONSTRAINT/i.test(l)
+          );
+        const columns = {};
+        colLines.forEach((line) => {
+          const m = line.match(
+            /^([`"']?)([A-Za-z0-9_]+)\1\s+([A-Za-z0-9_()]+)\b/i
+          );
+          if (m) {
+            const cname = m[2];
+            const ctype = /enum/i.test(m[3]) ? 'text' : m[3].toLowerCase();
+            columns[cname] = {
+              type: ctype,
+              nullable: !/NOT\s+NULL/i.test(line),
+            };
+            // Attach salvaged enum values if available
+            if (enumValuesPerColumn[cname]) {
+              columns[cname].enumValues = enumValuesPerColumn[cname];
+            }
+            if (inlineChecks[cname]) {
+              recovered.tables[tableName] = recovered.tables[tableName] || {
+                name: tableName,
+              };
+              recovered.tables[tableName].checks =
+                recovered.tables[tableName].checks || [];
+              recovered.tables[tableName].checks.push({
+                column: cname,
+                expression: inlineChecks[cname],
+                level: 'column',
+              });
+            }
+          }
+        });
+        const fks = [];
+        const fkRegex =
+          /FOREIGN\s+KEY\s*\(([^)]+)\)\s+REFERENCES\s+([A-Za-z0-9_"`]+)\s*\(([^)]+)\)/gi;
+        for (const match of rawBlock.matchAll(fkRegex)) {
+          fks.push({
+            columns: match[1]
+              .split(/\s*,\s*/)
+              .map((c) => c.replace(/[`"']/g, '')),
+            referenceTable: match[2].replace(/[`"']/g, ''),
+            referenceColumns: match[3]
+              .split(/\s*,\s*/)
+              .map((c) => c.replace(/[`"']/g, '')),
+          });
+        }
+        recovered.tables[tableName] = {
+          name: tableName,
+          columns,
+          primaryKey: [],
+          foreignKeys: fks,
+        };
+        warnings.push({
+          type: 'regex-salvage',
+          message: `Table ${tableName} salvaged with regex fallback`,
+        });
+      }
+    }
+
+    if (Object.keys(recovered.tables).length === 0) {
+      // Final AI fallback
+      try {
+        const prompt = `Parse this DDL and return JSON with tables mapping. Only JSON. DDL: ${original}`;
+        const result = await this.model.generateContent(prompt);
+        const text = result.response.text();
+        const jsonStr = text.replace(/```json\n|\n```/g, '').trim();
+        const parsed = JSON.parse(jsonStr);
+        const norm = this._normalizeAISchema(parsed);
+        warnings.push({
+          type: 'ai-fallback',
+          message: 'AI schema recovery used (all parser attempts failed)',
+        });
+        norm.meta = norm.meta || {};
+        norm.meta.parseWarnings = warnings;
+        return norm;
+      } catch (e) {
+        const err = new Error('DDL parsing failed completely: ' + e.message);
+        err.warnings = warnings;
+        throw err;
+      }
+    }
+
+    // Optional AI enhancement if enabled
+    if (process.env.USE_AI !== 'false') {
+      try {
+        const enhanced = await this._enhanceSchemaWithAI(recovered, original);
+        enhanced.meta = enhanced.meta || {};
+        enhanced.meta.parseWarnings = warnings;
+        return enhanced;
+      } catch (e) {
+        warnings.push({
+          type: 'ai-enhance-skip',
+          message: 'AI enhancement skipped: ' + e.message,
+        });
+      }
+    }
+
+    recovered.meta = recovered.meta || {};
+    recovered.meta.parseWarnings = warnings;
+    // Collect enums summary at schema meta level for easier client usage
+    const enumSummary = {};
+    for (const [t, def] of Object.entries(recovered.tables)) {
+      for (const [c, colDef] of Object.entries(def.columns || {})) {
+        if (colDef.enumValues) {
+          enumSummary[t] = enumSummary[t] || {};
+          enumSummary[t][c] = colDef.enumValues;
+        }
+      }
+    }
+    if (Object.keys(enumSummary).length) {
+      recovered.meta.enums = enumSummary;
+    }
+    return recovered;
   }
 
   async generateSyntheticData(schema, instructions, config = {}) {
@@ -381,6 +728,11 @@ class DataGenerator {
       if (abortSignal?.aborted) {
         throw new Error('Generation aborted');
       }
+      console.log(
+        '[gen:table:start]',
+        tableName,
+        `(${i + 1}/${tables.length})`
+      );
       const prompt = `
         Generate synthetic data for the ${tableName} table.
         Generate ${numRecords} records while maintaining referential integrity.
@@ -395,8 +747,33 @@ class DataGenerator {
       let tableData = [];
       try {
         if (abortSignal?.aborted) throw new Error('Generation aborted');
-        const result = await model.generateContent(prompt);
+        const timeoutMs = Number(process.env.AI_TABLE_TIMEOUT_MS || 25000);
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('AI table generation timeout')),
+            timeoutMs
+          )
+        );
+        const result = await Promise.race([
+          model.generateContent(prompt),
+          timeoutPromise,
+        ]);
         const rawText = result.response.text();
+        // Console log a trimmed view of the raw Gemini response so we can verify AI output before parsing
+        try {
+          const trimmed =
+            rawText.length > 600 ? rawText.slice(0, 600) + '…' : rawText;
+          console.log(
+            '[ai:raw]',
+            tableName,
+            'chars=',
+            rawText.length,
+            '\n',
+            trimmed
+          );
+        } catch (_) {
+          /* ignore logging issues */
+        }
         // cleanGeminiJSON may return an object/array when it successfully parses;
         // we only need a string for the subsequent startsWith/endsWith checks.
         const rawClean = cleanGeminiJSON(rawText, 'array');
@@ -444,6 +821,7 @@ class DataGenerator {
           });
         }
       }
+      console.log('[gen:table:complete]', tableName, 'rows=', tableData.length);
 
       generatedData[tableName] = tableData;
       if (typeof onTableComplete === 'function') {
@@ -488,6 +866,7 @@ class DataGenerator {
           ai: true,
           temperature: effectiveTemp,
           aiErrors,
+          timeoutMs: Number(process.env.AI_TABLE_TIMEOUT_MS || 25000),
         },
       };
     }

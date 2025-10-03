@@ -32,6 +32,7 @@ import { setupDatabase } from './lib/database.js';
 import { initializeLangfuse } from './lib/monitoring.js';
 import DataGenerator from './lib/dataGenerator.js';
 import DatasetManager from './lib/datasetManager.js';
+import ChatService from './lib/chatService.js';
 import {
   generateDeterministicData,
   validateDeterministicData,
@@ -46,6 +47,7 @@ const app = express();
 const dataGenerator = new DataGenerator();
 const datasetManager = new DatasetManager();
 const generationService = new GenerationService();
+const chatService = new ChatService();
 
 // Simple in-memory concurrency cap
 const MAX_CONCURRENT_GENERATIONS = Number(
@@ -611,6 +613,46 @@ app.get('/api/health', async (_req, res, next) => {
   }
 });
 
+// Test Gemini's DDL understanding
+app.post('/api/test-ddl', async (req, res, next) => {
+  try {
+    const { ddl } = req.body;
+    if (!ddl) {
+      return res.status(400).json({ error: 'DDL required' });
+    }
+    const understanding = await chatService.testDDLUnderstanding(ddl);
+    res.json({ understanding });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Test data generation for a specific table
+app.post('/api/test-data', async (req, res, next) => {
+  try {
+    const { ddl, tableName, count } = req.body;
+    if (!ddl || !tableName) {
+      return res.status(400).json({ error: 'DDL and tableName required' });
+    }
+    // First parse the schema
+    const schema = await dataGenerator.parseDDL(ddl);
+    if (!schema.tables[tableName]) {
+      return res
+        .status(404)
+        .json({ error: `Table ${tableName} not found in schema` });
+    }
+    // Generate test data for the table
+    const result = await chatService.testDataGeneration(
+      schema,
+      tableName,
+      count
+    );
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // UI configuration / limits endpoint
 app.get('/api/config', (_req, res) => {
   res.json({
@@ -619,6 +661,20 @@ app.get('/api/config', (_req, res) => {
     aiEnabled: process.env.USE_AI !== 'false',
     model: process.env.GOOGLE_GENAI_MODEL || 'gemini-2.0-flash-001',
   });
+});
+
+// Chat endpoint
+app.post('/api/chat', async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+    const response = await chatService.generateResponse(message);
+    res.json({ response });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Serve React app
