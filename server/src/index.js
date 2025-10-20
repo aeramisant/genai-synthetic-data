@@ -33,6 +33,7 @@ import { initializeLangfuse, flushLangfuse } from './lib/monitoring.js';
 import DataGenerator from './lib/dataGenerator.js';
 import DatasetManager from './lib/datasetManager.js';
 import ChatService from './lib/chatService.js';
+import QueryService from './lib/queryService.js';
 import {
   generateDeterministicData,
   validateDeterministicData,
@@ -49,6 +50,7 @@ const dataGenerator = new DataGenerator();
 const datasetManager = new DatasetManager();
 const generationService = new GenerationService();
 const chatService = new ChatService();
+const queryService = new QueryService();
 
 // Simple in-memory concurrency cap
 const MAX_CONCURRENT_GENERATIONS = Number(
@@ -687,7 +689,7 @@ app.get('/api/config', (_req, res) => {
   });
 });
 
-// Chat endpoint
+// Chat endpoint (general AI chat)
 app.post('/api/chat', async (req, res) => {
   try {
     const { message } = req.body;
@@ -698,6 +700,36 @@ app.post('/api/chat', async (req, res) => {
     res.json({ response });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Query endpoint (talk to your data)
+app.post('/api/chat/query', heavyLimiter, async (req, res) => {
+  try {
+    const { question, datasetId } = req.body;
+
+    if (!question || typeof question !== 'string') {
+      return res.status(400).json({ error: 'question (string) is required' });
+    }
+
+    if (!datasetId || typeof datasetId !== 'number') {
+      return res.status(400).json({ error: 'datasetId (number) is required' });
+    }
+
+    if (question.length > 500) {
+      return res
+        .status(400)
+        .json({ error: 'Question too long (max 500 chars)' });
+    }
+
+    const result = await queryService.handleQuery(question, datasetId);
+    res.json(result);
+  } catch (error) {
+    console.error('Query error:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to process query',
+      answer: 'Sorry, I encountered an error processing your question.',
+    });
   }
 });
 

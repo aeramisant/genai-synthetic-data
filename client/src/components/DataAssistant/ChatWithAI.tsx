@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import './TalkToData.css';
+import './ChatWithAI.css';
 
 type Message = {
   id: string;
@@ -7,7 +7,7 @@ type Message = {
   isUser: boolean;
 };
 
-function TalkToData() {
+function ChatWithAI() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -57,7 +57,7 @@ function TalkToData() {
   };
 
   return (
-    <div className="talk-to-data">
+    <div className="chat-with-ai">
       <div className="messages-container">
         {messages.map((message) => (
           <div
@@ -83,4 +83,4 @@ function TalkToData() {
   );
 }
 
-export default TalkToData;
+export default ChatWithAI;

@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import './App.css';
 import DataGeneration from './components/DataAssistant/DataGeneration';
-import TalkToData from './components/DataAssistant/TalkToData';
+import ChatWithAI from './components/DataAssistant/ChatWithAI';
+import TalkToYourData from './components/DataAssistant/TalkToYourData';
 import DatasetList from './components/DatasetList/DatasetList';
 
 function App() {
@@ -34,17 +35,31 @@ function App() {
           <button
             type="button"
             className={`sidebar-button ${
-              activeTab === 'talkToData' ? 'active' : ''
+              activeTab === 'talkToYourData' ? 'active' : ''
             }`}
-            onClick={() => setActiveTab('talkToData')}>
-            <i className="fas fa-comment"></i> Talk to your data
+            onClick={() => setActiveTab('talkToYourData')}>
+            <i className="fas fa-chart-bar"></i> Talk to your data
+          </button>
+          <button
+            type="button"
+            className={`sidebar-button ${
+              activeTab === 'chatWithAI' ? 'active' : ''
+            }`}
+            onClick={() => setActiveTab('chatWithAI')}>
+            <i className="fas fa-comment"></i> Chat with AI
           </button>
         </aside>
         <main className="content">
           {activeTab === 'dataGeneration' && (
-            <DataGeneration selectedDatasetId={selectedDatasetId} />
+            <DataGeneration
+              selectedDatasetId={selectedDatasetId}
+              onDatasetGenerated={(datasetId) =>
+                setSelectedDatasetId(datasetId)
+              }
+            />
           )}
-          {activeTab === 'talkToData' && <TalkToData />}
+          {activeTab === 'talkToYourData' && <TalkToYourData />}
+          {activeTab === 'chatWithAI' && <ChatWithAI />}
         </main>
       </div>
     </div>
@@ -52,38 +67,3 @@ function App() {
 }
 
 export default App;
-// import { useState } from 'react'
-// import reactLogo from './assets/react.svg'
-// import viteLogo from '/vite.svg'
-// import './App.css'
-
-// function App() {
-//   const [count, setCount] = useState(0)
-
-//   return (
-//     <>
-//       <div>
-//         <a href="https://vite.dev" target="_blank">
-//           <img src={viteLogo} className="logo" alt="Vite logo" />
-//         </a>
-//         <a href="https://react.dev" target="_blank">
-//           <img src={reactLogo} className="logo react" alt="React logo" />
-//         </a>
-//       </div>
-//       <h1>Vite + React</h1>
-//       <div className="card">
-//         <button onClick={() => setCount((count) => count + 1)}>
-//           count is {count}
-//         </button>
-//         <p>
-//           Edit <code>src/App.tsx</code> and save to test HMR
-//         </p>
-//       </div>
-//       <p className="read-the-docs">
-//         Click on the Vite and React logos to learn more
-//       </p>
-//     </>
-//   )
-// }
-
-// export default App

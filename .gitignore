@@ -28,7 +28,10 @@ Thumbs.db
 # Generated data files
 *.csv
 *.zip
+*.json
+output/
 outputs/
+uploads/
 
 # Test coverage
 coverage/
