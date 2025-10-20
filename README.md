@@ -15,16 +15,20 @@ The project is divided into 3 phases, with Phase 1 focusing on data generation a
 | ---------------- | ------------------------------------ |
 | LLM              | Gemini 2.0 Flash (or newer)          |
 | SDK              | Google GenAI SDK with Vertex AI Auth |
-| UI               | Streamlit or Gradio                  |
+| Frontend         | React 19 + TypeScript + Vite         |
+| Backend          | Node.js + Express                    |
+| Real-time        | Socket.IO (WebSocket streaming)      |
 | Database         | PostgreSQL                           |
-| Containerization | Docker                               |
+| Containerization | Docker + Docker Compose              |
 | Monitoring       | Langfuse for observability           |
+
+> **Note**: The original spec suggested Streamlit or Gradio, but we chose **React + TypeScript** for better control, real-time streaming support via Socket.IO, and scalability for future phases.
 
 ### LLM Implementation Requirements
 
-- Use streaming where appropriate
-- Implement function calling
-- Support JSON/structured output
+- ✅ Streaming (Socket.IO for real-time table chunk delivery)
+- ✅ JSON/structured output (with cleanup and validation)
+- 🔄 Function calling (basic JSON enforcement; can be enhanced with schema-based tool calling)
 
 ## Project Phases
 
@@ -184,3 +188,61 @@ See full payload contracts in `docs/API.md`.
 ### CORS / Frontend Origin
 
 Configure `NODE_ENV=development` to allow `http://localhost:3000` (frontend dev). Backend now defaults to port `4000` (was `5000`). For production set `PORT` or adjust the origin expression in `src/index.js`.
+
+---
+
+## Observability with Langfuse
+
+Langfuse provides comprehensive observability for AI operations, tracking prompts, responses, errors, and performance metrics.
+
+### Setup
+
+1. **Get Langfuse credentials**:
+
+   - Sign up at [https://cloud.langfuse.com](https://cloud.langfuse.com) (or self-host)
+   - Obtain your `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`
+
+2. **Configure environment** (`server/.env`):
+
+   ```bash
+   LANGFUSE_ENABLED=true
+   LANGFUSE_PUBLIC_KEY=pk-lf-...
+   LANGFUSE_SECRET_KEY=sk-lf-...
+   LANGFUSE_HOST=https://cloud.langfuse.com
+   ```
+
+3. **What gets tracked**:
+
+   - Schema parsing (DDL input, table count, duration)
+   - Per-table AI generation (prompts, responses, retries, errors)
+   - Validation results (PK/FK violations, NOT NULL issues)
+   - Dataset modifications (prompts, diffs, success/failure)
+
+4. **Viewing traces**:
+   - Navigate to your Langfuse dashboard
+   - Find traces by `jobId` or `datasetId`
+   - Review spans for each generation phase
+   - Analyze errors, token usage, and latency
+
+### Disabling Langfuse
+
+Set `LANGFUSE_ENABLED=false` in your `.env` or omit the configuration entirely. The application will log a message and continue without observability.
+
+---
+
+## Environment Configuration
+
+Copy `server/env.example.txt` to `server/.env` and fill in your credentials:
+
+```bash
+cp server/env.example.txt server/.env
+```
+
+Key variables:
+
+- `GEMINI_API_KEY` (required for AI generation)
+- `DATABASE_URL` (PostgreSQL connection string)
+- `PORT` (default: 4000)
+- `LANGFUSE_ENABLED`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` (optional observability)
+
+See `server/env.example.txt` for the full list of configurable options.

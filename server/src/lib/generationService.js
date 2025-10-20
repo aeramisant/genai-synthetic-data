@@ -5,6 +5,13 @@ import { validateDeterministicData } from './deterministicGenerator.js';
 import DataModifier from './dataModifier.js';
 import DataExporter from './dataExporter.js';
 import { pool } from './database.js';
+import {
+  createGenerationTrace,
+  trackSchemaParsing,
+  trackValidation,
+  trackModification,
+  finalizeTrace,
+} from './monitoring.js';
 // Normalization & FK repair intentionally removed for Phase 1 raw AI mode.
 
 // Lightweight in-memory job store (could be replaced by Redis later)
@@ -49,9 +56,26 @@ export class GenerationService {
     { ddl, instructions, config, saveName, description, callbacks }
   ) {
     const controller = abortControllers.get(job.id);
+    const trace = createGenerationTrace({
+      jobId: job.id,
+      userId: config?.userId || 'anonymous',
+      metadata: {
+        instructions: instructions?.slice(0, 200),
+        temperature: config?.temperature,
+        maxTokens: config?.maxTokens,
+        numRecords: config?.numRecords,
+      },
+    });
     try {
       job.phase = 'parsing';
+      const parseStart = Date.now();
       const schema = await this.parseDDL(ddl);
+      const parseDuration = Date.now() - parseStart;
+      trackSchemaParsing(trace, {
+        ddl,
+        result: schema,
+        durationMs: parseDuration,
+      });
       job.progress = 0.1;
       const withMeta = true;
       job.phase = 'generating';
@@ -90,9 +114,12 @@ export class GenerationService {
         meta.instructionsLength = meta.instructions.length;
       }
       job.phase = 'validating';
+      const validationStart = Date.now();
       const validation = validateDeterministicData(schema, data, {
         debug: config?.debug,
       });
+      const validationDuration = Date.now() - validationStart;
+      trackValidation(trace, { validation, durationMs: validationDuration });
       meta = { ...meta, validation: validation.report };
       job.progress = 0.9;
       job.phase = 'saving';
@@ -135,6 +162,18 @@ export class GenerationService {
           Object.entries(data).map(([t, rows]) => [t, rows.length])
         ),
       };
+      finalizeTrace(trace, {
+        status: 'completed',
+        datasetId,
+        metadata: {
+          tables: Object.keys(data).length,
+          totalRows: Object.values(data).reduce(
+            (sum, rows) => sum + rows.length,
+            0
+          ),
+          validationPassed: validation.passed,
+        },
+      });
     } catch (err) {
       if (job.cancelled || /aborted/i.test(err.message)) {
         job.status = 'cancelled';
@@ -143,6 +182,11 @@ export class GenerationService {
         job.status = 'error';
         job.error = err.message;
       }
+      finalizeTrace(trace, {
+        status: job.status,
+        error: err,
+        metadata: { phase: job.phase },
+      });
     } finally {
       abortControllers.delete(job.id);
     }
@@ -316,80 +360,109 @@ export class GenerationService {
   }
 
   async modifyDataset(datasetId, { prompt, tableName }) {
-    // Load original dataset fully
-    const original = await this.getDataset(datasetId, { includeData: true });
-    const originalData = original.data;
-    let targetData = originalData;
-    if (tableName) {
-      if (!originalData[tableName])
-        throw new Error('Table not found in dataset');
-      targetData = { [tableName]: originalData[tableName] };
-    }
-
-    const modified = await this.modifier.modifyData(targetData, prompt);
-
-    // Merge back if table-specific
-    const merged = tableName
-      ? { ...originalData, [tableName]: modified[tableName] }
-      : modified;
-
-    // Simple diff summary
-    const diff = {};
-    Object.keys(merged).forEach((t) => {
-      const beforeLen = originalData[t]?.length || 0;
-      const afterLen = merged[t]?.length || 0;
-      if (beforeLen !== afterLen) {
-        diff[t] = {
-          before: beforeLen,
-          after: afterLen,
-          delta: afterLen - beforeLen,
-        };
-      }
-    });
-
-    // Persist changes: remove old rows and insert new
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('DELETE FROM generated_data WHERE dataset_id = $1', [
+    const trace = createGenerationTrace({
+      jobId: `modify_${datasetId}_${Date.now()}`,
+      userId: 'anonymous',
+      metadata: {
         datasetId,
-      ]);
-      for (const [t, rows] of Object.entries(merged)) {
-        for (const row of rows) {
-          await client.query(
-            'INSERT INTO generated_data (dataset_id, table_name, data) VALUES ($1, $2, $3)',
-            [datasetId, t, JSON.stringify(row)]
-          );
+        tableName: tableName || 'all',
+        operation: 'modify',
+      },
+    });
+    try {
+      // Load original dataset fully
+      const original = await this.getDataset(datasetId, { includeData: true });
+      const originalData = original.data;
+      let targetData = originalData;
+      if (tableName) {
+        if (!originalData[tableName])
+          throw new Error('Table not found in dataset');
+        targetData = { [tableName]: originalData[tableName] };
+      }
+
+      const modified = await this.modifier.modifyData(targetData, prompt);
+
+      // Merge back if table-specific
+      const merged = tableName
+        ? { ...originalData, [tableName]: modified[tableName] }
+        : modified;
+
+      // Simple diff summary
+      const diff = {};
+      Object.keys(merged).forEach((t) => {
+        const beforeLen = originalData[t]?.length || 0;
+        const afterLen = merged[t]?.length || 0;
+        if (beforeLen !== afterLen) {
+          diff[t] = {
+            before: beforeLen,
+            after: afterLen,
+            delta: afterLen - beforeLen,
+          };
+        }
+      });
+
+      // Persist changes: remove old rows and insert new
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM generated_data WHERE dataset_id = $1', [
+          datasetId,
+        ]);
+        for (const [t, rows] of Object.entries(merged)) {
+          for (const row of rows) {
+            await client.query(
+              'INSERT INTO generated_data (dataset_id, table_name, data) VALUES ($1, $2, $3)',
+              [datasetId, t, JSON.stringify(row)]
+            );
+          }
+        }
+        await client.query(
+          'UPDATE generated_datasets SET updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+          [datasetId]
+        );
+        await client.query('COMMIT');
+      } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+      } finally {
+        client.release();
+      }
+
+      // Re-validate complete dataset
+      // Need the schema; stored schema_definition field contains original
+      const schemaDef =
+        original.metadata.schema_definition ||
+        original.metadata.generation_meta?.schema;
+      // If schema not stored explicitly here, we trust structure from rows (skip validation)
+      let validation = null;
+      if (schemaDef) {
+        try {
+          validation = validateDeterministicData(schemaDef, merged, {});
+        } catch {
+          /* ignore */
         }
       }
-      await client.query(
-        'UPDATE generated_datasets SET updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-        [datasetId]
-      );
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
-    } finally {
-      client.release();
+      trackModification(trace, { datasetId, prompt, tableName, diff });
+      finalizeTrace(trace, {
+        status: 'completed',
+        datasetId,
+        metadata: { diff, validationPassed: validation?.passed },
+      });
+      return { datasetId, diff, validation: validation?.report };
+    } catch (modifyError) {
+      trackModification(trace, {
+        datasetId,
+        prompt,
+        tableName,
+        error: modifyError,
+      });
+      finalizeTrace(trace, {
+        status: 'error',
+        error: modifyError,
+        metadata: { datasetId },
+      });
+      throw modifyError;
     }
-
-    // Re-validate complete dataset
-    // Need the schema; stored schema_definition field contains original
-    const schemaDef =
-      original.metadata.schema_definition ||
-      original.metadata.generation_meta?.schema;
-    // If schema not stored explicitly here, we trust structure from rows (skip validation)
-    let validation = null;
-    if (schemaDef) {
-      try {
-        validation = validateDeterministicData(schemaDef, merged, {});
-      } catch {
-        /* ignore */
-      }
-    }
-
-    return { datasetId, diff, validation: validation?.report };
   }
 
   async health() {

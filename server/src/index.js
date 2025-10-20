@@ -29,7 +29,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import rateLimit from 'express-rate-limit';
 import { setupDatabase } from './lib/database.js';
-import { initializeLangfuse } from './lib/monitoring.js';
+import { initializeLangfuse, flushLangfuse } from './lib/monitoring.js';
 import DataGenerator from './lib/dataGenerator.js';
 import DatasetManager from './lib/datasetManager.js';
 import ChatService from './lib/chatService.js';
@@ -768,6 +768,8 @@ async function gracefulShutdown(signal) {
       await new Promise((resolve) => activeServer.close(resolve));
       console.log('HTTP server closed');
     }
+    // Flush pending Langfuse events
+    await flushLangfuse();
     // Close PG pool lazily imported (avoids circular import here)
     const { pool } = await import('./lib/database.js');
     await pool.end();
