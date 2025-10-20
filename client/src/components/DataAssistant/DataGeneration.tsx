@@ -42,7 +42,7 @@ function DataGeneration({ selectedDatasetId }: DataGenerationProps) {
     }
     setPerTableOverrides(out);
   };
-  // Target rows input removed: we rely on default (~10) or prompt instructions.
+  // Target rows advisory input active; per-table overrides optional.
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);

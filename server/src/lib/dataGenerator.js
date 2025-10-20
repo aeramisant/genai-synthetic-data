@@ -217,6 +217,12 @@ class DataGenerator {
     }
     const tables = orderTablesForGeneration(schema);
     const effectiveGlobal = clampRowCount(numRecords);
+    const clampedPerTable = Object.fromEntries(
+      Object.entries(perTableRowCounts || {}).map(([t, v]) => [
+        t,
+        clampRowCount(v),
+      ])
+    );
     const generatedData = {};
     const aiErrors = [];
     const retriesMeta = {}; // per-table retry audit
@@ -258,8 +264,9 @@ class DataGenerator {
         generatedData[tableName] = [];
         continue;
       }
+      const targetHint = clampedPerTable[tableName] || effectiveGlobal;
       const prompt = `Generate synthetic data for the ${tableName} table.
-Target row count (soft suggestion): about ${effectiveGlobal} rows (it's OK if you produce more or fewer if it improves relational realism).
+Target row count (soft suggestion): about ${targetHint} rows (it's OK if you produce more or fewer if it improves relational realism).
 Table Schema: ${JSON.stringify(tableSchema, null, 2)}
 Full Schema Context: ${JSON.stringify(schema, null, 2)}
 Additional Instructions: ${
@@ -443,7 +450,7 @@ IMPORTANT: Return only the JSON array without any markdown formatting or code bl
           { tables: { [tableName]: schema.tables[tableName] } },
           {
             globalRowCount: clampRowCount(
-              perTableRowCounts[tableName] || effectiveGlobal
+              clampedPerTable[tableName] || effectiveGlobal
             ),
             nullProbability: nullProbability[tableName]
               ? { [tableName]: nullProbability[tableName] }
@@ -457,7 +464,7 @@ IMPORTANT: Return only the JSON array without any markdown formatting or code bl
         if (!tableData.length) {
           const cols = Object.keys(tableSchema.columns || {});
           const target = clampRowCount(
-            perTableRowCounts[tableName] || effectiveGlobal || 1
+            clampedPerTable[tableName] || effectiveGlobal || 1
           );
           tableData = Array.from({ length: target }).map((_, i) => {
             const r = {};
@@ -509,6 +516,10 @@ IMPORTANT: Return only the JSON array without any markdown formatting or code bl
       strictAIMode: !!strictAIMode,
       retries: retriesMeta,
       structuredJSON: !!structuredJSON,
+      rowHints: {
+        global: effectiveGlobal,
+        perTable: clampedPerTable,
+      },
     };
     if (config?.integrityRepair) {
       try {
