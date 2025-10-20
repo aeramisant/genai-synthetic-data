@@ -65,6 +65,7 @@ export class GenerationService {
           onTableStart: callbacks?.onTableStart,
           onTableComplete: callbacks?.onTableComplete,
           onProgress: callbacks?.onProgress,
+          onTableChunk: callbacks?.onTableChunk,
         }
       );
       let data;

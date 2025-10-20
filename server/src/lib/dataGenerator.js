@@ -176,6 +176,7 @@ class DataGenerator {
       onTableStart,
       onTableComplete,
       onProgress,
+      onTableChunk,
       structuredJSON = true,
     } = config;
     const useAI = process.env.USE_AI !== 'false';
@@ -488,6 +489,24 @@ IMPORTANT: Return only the JSON array without any markdown formatting or code bl
       console.log('[gen:table:complete]', tableName, 'rows=', tableData.length);
 
       generatedData[tableName] = tableData;
+      if (
+        typeof onTableChunk === 'function' &&
+        Array.isArray(tableData) &&
+        tableData.length
+      ) {
+        const chunkSize = Math.max(1, Math.min(50, config.chunkSize || 25));
+        for (let start = 0; start < tableData.length; start += chunkSize) {
+          const chunk = tableData.slice(start, start + chunkSize);
+          try {
+            onTableChunk({
+              table: tableName,
+              chunk,
+              delivered: Math.min(start + chunk.length, tableData.length),
+              total: tableData.length,
+            });
+          } catch (_) {}
+        }
+      }
       if (typeof onTableComplete === 'function') {
         try {
           onTableComplete({

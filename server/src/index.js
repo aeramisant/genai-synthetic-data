@@ -455,6 +455,15 @@ app.post('/api/generate', heavyLimiter, async (req, res, next) => {
             rows,
           });
         },
+        onTableChunk: ({ table, chunk, delivered, total }) => {
+          if (!jobIdRef) return;
+          emitToJob(jobIdRef, 'job:tableChunk', {
+            table,
+            chunk,
+            delivered,
+            total,
+          });
+        },
         onProgress: ({ phase, completed, total, ratio }) => {
           if (!jobIdRef) return;
           // Update job.progress using heuristic mapping (0.1 -> 0.9 window)

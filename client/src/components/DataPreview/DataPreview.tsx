@@ -1,8 +1,12 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import RawMetaViewer from './RawMetaViewer';
 import DataTable from './DataTable';
 import QuickEdit from './QuickEdit';
 import './DataPreview.css';
+import { io } from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
+
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
 
 type Row = Record<string, unknown>;
 interface DatasetPayloadMetaValidationSummary {
@@ -47,16 +51,44 @@ function DataPreview({ jobId, datasetIdExternal }: DataPreviewProps) {
   const pollRef = useRef<number | null>(null);
   const [datasetId, setDatasetId] = useState<number | null>(null);
   const [jobCompleted, setJobCompleted] = useState(false);
+  const socketRef = useRef<Socket | null>(null);
+  const [liveData, setLiveData] = useState<Record<string, Row[]>>({});
   // Raw/meta/validation visualization moved into RawMetaViewer to isolate removable debug UI
 
   // Clear polling on unmount
   useEffect(() => {
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current);
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+    };
+  }, []);
+
+  // Initialize socket connection once
+  useEffect(() => {
+    if (socketRef.current) return;
+    const socket = io(SOCKET_URL, {
+      transports: ['websocket'],
+      autoConnect: true,
+      reconnectionAttempts: 5,
+    });
+    socketRef.current = socket;
+    return () => {
+      socket.disconnect();
+      socketRef.current = null;
     };
   }, []);
 
   // Poll job status if jobId provided
+  const stopPolling = useCallback(() => {
+    if (pollRef.current !== null) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     if (!jobId) return;
     setStatus('checking');
@@ -65,6 +97,7 @@ function DataPreview({ jobId, datasetIdExternal }: DataPreviewProps) {
     setSelectedTable('');
     setDatasetId(null);
     setJobCompleted(false);
+    setLiveData({});
 
     const poll = async () => {
       try {
@@ -80,10 +113,7 @@ function DataPreview({ jobId, datasetIdExternal }: DataPreviewProps) {
           job.status === 'cancelled'
         ) {
           setJobCompleted(true);
-          if (pollRef.current) {
-            window.clearInterval(pollRef.current);
-            pollRef.current = null;
-          }
+          stopPolling();
           if (job.status === 'completed') {
             const id = job.result?.datasetId;
             if (id) {
@@ -103,17 +133,92 @@ function DataPreview({ jobId, datasetIdExternal }: DataPreviewProps) {
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Job polling failed';
         setError(msg);
-        if (pollRef.current) {
-          window.clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
+        stopPolling();
       }
     };
 
     // Initial fetch then interval
     poll();
     pollRef.current = window.setInterval(poll, 1200);
-  }, [jobId]);
+  }, [jobId, stopPolling]);
+
+  // Subscribe to socket job events for streaming updates
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket || !jobId) return;
+
+    const handleStatus = (payload: { status?: string; progress?: number }) => {
+      if (payload.status) setStatus(payload.status);
+      if (typeof payload.progress === 'number') setProgress(payload.progress);
+    };
+    const handleProgress = (payload: { progress?: number; phase?: string }) => {
+      if (typeof payload.progress === 'number') setProgress(payload.progress);
+      if (payload.phase) setPhase(payload.phase);
+    };
+    const handleTableStart = (payload: { table: string }) => {
+      setLiveData((prev) => ({
+        ...prev,
+        [payload.table]: prev[payload.table] || [],
+      }));
+      setSelectedTable((prev) => prev || payload.table);
+    };
+    const handleTableChunk = (payload: {
+      table: string;
+      chunk: Row[];
+      delivered?: number;
+      total?: number;
+    }) => {
+      if (!Array.isArray(payload.chunk) || !payload.table) return;
+      setLiveData((prev) => {
+        const existing = prev[payload.table] || [];
+        return { ...prev, [payload.table]: [...existing, ...payload.chunk] };
+      });
+      setSelectedTable((prev) => (prev ? prev : payload.table));
+    };
+    const handleTableComplete = (payload: { table: string; rows?: number }) => {
+      if (payload.table) {
+        setLiveData((prev) => ({
+          ...prev,
+          [payload.table]: prev[payload.table] || [],
+        }));
+      }
+    };
+    const handleCompleted = (payload: {
+      status?: string;
+      result?: { datasetId?: number };
+    }) => {
+      if (payload.status) setStatus(payload.status);
+      if (payload.result?.datasetId) {
+        setDatasetId(payload.result.datasetId);
+      }
+      setJobCompleted(true);
+      stopPolling();
+    };
+    const handleError = (payload: { error?: string }) => {
+      if (payload.error) setError(payload.error);
+      stopPolling();
+    };
+
+    socket.emit('subscribe:job', { jobId });
+    socket.on('job:status', handleStatus);
+    socket.on('job:progress', handleProgress);
+    socket.on('job:tableStart', handleTableStart);
+    socket.on('job:tableChunk', handleTableChunk);
+    socket.on('job:tableComplete', handleTableComplete);
+    socket.on('job:completed', handleCompleted);
+    socket.on('job:error', handleError);
+
+    return () => {
+      socket.emit('unsubscribe:job', { jobId });
+      socket.off('job:status', handleStatus);
+      socket.off('job:progress', handleProgress);
+      socket.off('job:tableStart', handleTableStart);
+      socket.off('job:tableChunk', handleTableChunk);
+      socket.off('job:tableComplete', handleTableComplete);
+      socket.off('job:completed', handleCompleted);
+      socket.off('job:error', handleError);
+    };
+  }, [jobId, stopPolling]);
 
   // External dataset selection override
   // Avoid overriding while an active generation job is running OR immediately after a job completion introducing a new dataset.
@@ -163,9 +268,15 @@ function DataPreview({ jobId, datasetIdExternal }: DataPreviewProps) {
     fetchDataset();
   }, [fetchDataset]);
   // Derived values for rendering
-  const tables = Object.keys(dataset?.data || {});
+  const effectiveData = useMemo(() => {
+    if (dataset?.data && Object.keys(dataset.data).length) {
+      return dataset.data;
+    }
+    return liveData;
+  }, [dataset?.data, liveData]);
+  const tables = Object.keys(effectiveData || {});
   const rows =
-    selectedTable && dataset?.data ? dataset.data[selectedTable] : [];
+    selectedTable && effectiveData ? effectiveData[selectedTable] || [] : [];
   const validationSummary = dataset?.meta?.validation?.summary as
     | DatasetPayloadMetaValidationSummary
     | undefined;
