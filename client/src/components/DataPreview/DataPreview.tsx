@@ -39,9 +39,14 @@ interface DatasetPayload {
 interface DataPreviewProps {
   jobId?: string | null;
   datasetIdExternal?: number;
+  onDatasetGenerated?: (datasetId: number) => void;
 }
 
-function DataPreview({ jobId, datasetIdExternal }: DataPreviewProps) {
+function DataPreview({
+  jobId,
+  datasetIdExternal,
+  onDatasetGenerated,
+}: DataPreviewProps) {
   const [status, setStatus] = useState<string>('idle');
   const [progress, setProgress] = useState<number>(0);
   const [phase, setPhase] = useState<string>('');
@@ -190,6 +195,8 @@ function DataPreview({ jobId, datasetIdExternal }: DataPreviewProps) {
       if (payload.status) setStatus(payload.status);
       if (payload.result?.datasetId) {
         setDatasetId(payload.result.datasetId);
+        // Notify parent that a new dataset was generated
+        onDatasetGenerated?.(payload.result.datasetId);
       }
       setJobCompleted(true);
       stopPolling();
@@ -218,7 +225,7 @@ function DataPreview({ jobId, datasetIdExternal }: DataPreviewProps) {
       socket.off('job:completed', handleCompleted);
       socket.off('job:error', handleError);
     };
-  }, [jobId, stopPolling]);
+  }, [jobId, stopPolling, onDatasetGenerated]);
 
   // External dataset selection override
   // Avoid overriding while an active generation job is running OR immediately after a job completion introducing a new dataset.

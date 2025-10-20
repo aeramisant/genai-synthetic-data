@@ -8,9 +8,13 @@ import './DataGeneration.css';
 
 interface DataGenerationProps {
   selectedDatasetId?: number | null;
+  onDatasetGenerated?: (datasetId: number) => void;
 }
 
-function DataGeneration({ selectedDatasetId }: DataGenerationProps) {
+function DataGeneration({
+  selectedDatasetId,
+  onDatasetGenerated,
+}: DataGenerationProps) {
   const [ddlSchema, setDdlSchema] = useState('');
   const [prompt, setPrompt] = useState('');
   const PROMPT_MAX = 5000;
@@ -253,6 +257,7 @@ function DataGeneration({ selectedDatasetId }: DataGenerationProps) {
       <DataPreview
         jobId={currentJobId}
         datasetIdExternal={selectedDatasetId || undefined}
+        onDatasetGenerated={onDatasetGenerated}
       />
     </div>
   );
